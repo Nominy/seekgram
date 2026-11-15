@@ -167,6 +167,34 @@ pub struct SearchChat {
     pub title: String,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UpdateState {
+    /// Nothing happening: between checks, switched off, or not possible for this copy (`reason`).
+    #[default]
+    Idle,
+    Checking,
+    Downloading,
+    /// Downloaded; the service is stopping so the new version can be put in place.
+    Ready,
+    Failed,
+}
+
+/// Automatic updates (`src/service/update.rs`).
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Update {
+    pub state: UpdateState,
+    /// The version being downloaded or installed.
+    pub version: Option<String>,
+    /// Download progress, 0 to 100, while `downloading`.
+    pub percent: Option<u8>,
+    /// Why the last check or download failed, in words for the user.
+    pub error: Option<String>,
+    /// Why this copy does not update itself (not installed with Seekgram Setup), if so.
+    pub reason: Option<String>,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Status {
@@ -177,6 +205,7 @@ pub struct Status {
     pub indexer: Indexer,
     pub index: IndexCounts,
     pub search_chat: SearchChat,
+    pub update: Update,
     pub settings: Settings,
     /// e.g. `http://127.0.0.1:28741/mcp`
     pub mcp_url: String,

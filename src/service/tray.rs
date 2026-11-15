@@ -12,7 +12,7 @@ use tray_icon::{
     Icon, MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent,
 };
 
-use super::state::{AccountStep, IndexerState, SetupState, Shared, Status};
+use super::state::{AccountStep, IndexerState, SetupState, Shared, Status, UpdateState};
 
 const OPEN: &str = "open";
 const INDEXING: &str = "indexing";
@@ -26,25 +26,35 @@ fn open_panel() {
     }
 }
 
-/// "Quit Seekgram" means all of it: open control panels are closed too, not left showing
-/// a stopped service. A panel is any visible window of another process running this same
-/// program; the service itself has no visible window.
+/// The program file a process runs, if it can be asked.
 #[cfg(windows)]
-fn close_panels() {
-    use windows::{core::BOOL, Win32::{Foundation::{CloseHandle, HWND, LPARAM, WPARAM}, System::Threading::{OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION}, UI::WindowsAndMessaging::{EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_CLOSE}}};
+fn process_image(pid: u32) -> Option<std::path::PathBuf> {
+    use windows::Win32::{Foundation::CloseHandle, System::Threading::{OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION}};
+    // SAFETY: plain Win32 calls; the buffer outlives the call and the handle is closed.
+    unsafe {
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        let mut buffer = [0u16; 1024];
+        let mut length = buffer.len() as u32;
+        let named = QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, windows::core::PWSTR(buffer.as_mut_ptr()), &mut length).is_ok();
+        let _ = CloseHandle(process);
+        named.then(|| std::path::PathBuf::from(String::from_utf16_lossy(&buffer[..length as usize])))
+    }
+}
+
+/// "Quit Seekgram" means all of it: open control panels are closed too, not left showing
+/// a stopped service. So does installing an update. A panel is any visible window of
+/// another process running this same program; the service has no visible window.
+#[cfg(windows)]
+pub fn close_panels() {
+    use windows::{core::BOOL, Win32::{Foundation::{HWND, LPARAM, WPARAM}, UI::WindowsAndMessaging::{EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_CLOSE}}};
     unsafe extern "system" fn visit(window: HWND, _: LPARAM) -> BOOL {
-        // SAFETY: called by EnumWindows with a valid window handle; the process handle is closed.
+        // SAFETY: called by EnumWindows with a valid window handle.
         unsafe {
             if !IsWindowVisible(window).as_bool() { return BOOL(1); }
             let mut pid = 0;
             GetWindowThreadProcessId(window, Some(&mut pid));
             if pid == 0 || pid == std::process::id() { return BOOL(1); }
-            let Ok(process) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else { return BOOL(1) };
-            let mut buffer = [0u16; 1024];
-            let mut length = buffer.len() as u32;
-            let named = QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, windows::core::PWSTR(buffer.as_mut_ptr()), &mut length).is_ok();
-            let _ = CloseHandle(process);
-            let ours = named && std::env::current_exe().is_ok_and(|exe| std::path::PathBuf::from(String::from_utf16_lossy(&buffer[..length as usize])) == exe);
+            let ours = process_image(pid).is_some_and(|image| std::env::current_exe().is_ok_and(|exe| image == exe));
             if ours { let _ = PostMessageW(Some(window), WM_CLOSE, WPARAM(0), LPARAM(0)); }
             BOOL(1)
         }
@@ -54,9 +64,10 @@ fn close_panels() {
 }
 
 #[cfg(not(windows))]
-fn close_panels() {}
+pub fn close_panels() {}
 
-/// One line saying what Seekgram is doing, shown when the pointer rests on the icon.
+/// What Seekgram is doing, shown when the pointer rests on the icon: one line, and a
+/// second while an update is being checked for, downloaded or installed.
 fn summary(status: &Status) -> String {
     let doing = if status.account.step != AccountStep::Ready {
         "waiting for you to log in".to_owned()
@@ -73,7 +84,15 @@ fn summary(status: &Status) -> String {
             IndexerState::Off | IndexerState::Stopping => "indexing paused".to_owned(),
         }
     };
-    format!("Seekgram: {doing}")
+    let update = status.update.version.as_deref().unwrap_or("");
+    let updating = match status.update.state {
+        UpdateState::Idle => String::new(),
+        UpdateState::Checking => "\nChecking for a new version".to_owned(),
+        UpdateState::Downloading => format!("\nDownloading version {update}"),
+        UpdateState::Ready => format!("\nInstalling version {update}"),
+        UpdateState::Failed => "\nThe last update attempt failed".to_owned(),
+    };
+    format!("Seekgram: {doing}{updating}")
 }
 
 fn indexing_label(on: bool) -> &'static str { if on { "Pause indexing" } else { "Resume indexing" } }

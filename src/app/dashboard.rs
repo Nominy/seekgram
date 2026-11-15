@@ -10,7 +10,7 @@ use gpui_component::{
     switch::Switch,
 };
 
-use crate::service::state::{IndexCounts, Indexer, IndexerState, Setup, SetupState, SetupStep, Status};
+use crate::service::state::{IndexCounts, Indexer, IndexerState, Setup, SetupState, SetupStep, Status, UpdateState};
 
 use super::{
     format,
@@ -152,6 +152,19 @@ impl Panel {
                     ),
             )
             .children(self.control_problem(Control::Autostart))
+            .child(
+                row()
+                    .gap_4()
+                    .child(setting("Install updates automatically", "Seekgram looks for a new version every few hours and installs it in the background."))
+                    .child(
+                        Switch::new("check-updates")
+                            .checked(status.settings.check_updates)
+                            .on_click(cx.listener(|panel, on: &bool, window, cx| panel.set_check_updates(*on, window, cx))),
+                    ),
+            )
+            .children(status.update.reason.clone().map(note))
+            .when(status.update.state == UpdateState::Failed, |card| card.children(status.update.error.clone().map(problem)))
+            .children(self.control_problem(Control::Updates))
             .child(self.settings_actions(cx))
             .children(self.control_problem(Control::DataFolder))
             .children(self.control_problem(Control::Logout))

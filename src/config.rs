@@ -29,11 +29,13 @@ pub struct Settings {
     pub autostart: bool,
     /// Serve the MCP endpoint for AI agents. Off by default: most users never need it.
     pub mcp: bool,
+    /// Look for a new version every few hours and install it by itself.
+    pub check_updates: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { port: DEFAULT_PORT, indexing: true, workers: 0, concurrency: 6, search_chat: None, search_group: None, autostart: true, mcp: false }
+        Self { port: DEFAULT_PORT, indexing: true, workers: 0, concurrency: 6, search_chat: None, search_group: None, autostart: true, mcp: false, check_updates: true }
     }
 }
 

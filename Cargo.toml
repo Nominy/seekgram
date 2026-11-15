@@ -39,6 +39,7 @@ tokenizers = { version = "0.23", default-features = false, features = ["onig"] }
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 uuid = { version = "1", features = ["v4"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
+velopack = "=1.2.161"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.61", features = [

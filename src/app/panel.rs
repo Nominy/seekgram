@@ -22,7 +22,7 @@ use crate::{
     cli,
     config::{Secrets, Settings},
     paths,
-    service::state::{AccountStep, IndexerState, SetupState, Status},
+    service::{state::{AccountStep, IndexerState, SetupState, Status}, update},
 };
 
 use super::{
@@ -46,6 +46,7 @@ pub enum Control {
     Indexing,
     SearchChat,
     Autostart,
+    Updates,
     DataFolder,
     Logout,
     Shutdown,
@@ -431,6 +432,10 @@ impl Panel {
         self.change_setting(Control::Autostart, |settings| settings.autostart = on, move |client| client.set_autostart(on), window, cx);
     }
 
+    pub(super) fn set_check_updates(&mut self, on: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.change_setting(Control::Updates, |settings| settings.check_updates = on, move |client| client.set_check_updates(on), window, cx);
+    }
+
     pub(super) fn set_mcp(&mut self, on: bool, window: &mut Window, cx: &mut Context<Self>) {
         self.change_setting(Control::Mcp, |settings| settings.mcp = on, move |client| client.set_mcp(on), window, cx);
     }
@@ -560,12 +565,22 @@ impl Panel {
             .gap_2()
             .child(widgets::icon("icons/mark.svg").size_5().text_color(color(theme::ACCENT)))
             .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child("Seekgram"));
-        let state = row().gap_3().pr_3().when_some(account, |state, status| {
-            let (label, tone) = Self::health(status);
-            state
-                .when_some(status.account.name.clone(), |state, name| state.child(note(name).max_w(px(260.)).truncate()))
-                .child(widgets::pill(label, tone))
-        });
+        // One line while a new version is being checked for, downloaded or installed, on every page.
+        let updating = match (&self.link, &self.status) {
+            (Link::Connected { .. }, Some(status)) => update::describe_status(&status.update),
+            _ => None,
+        };
+        let state = row()
+            .gap_3()
+            .pr_3()
+            .min_w_0()
+            .when_some(updating, |state, line| state.child(note(line).max_w(px(340.)).truncate()))
+            .when_some(account, |state, status| {
+                let (label, tone) = Self::health(status);
+                state
+                    .when_some(status.account.name.clone(), |state, name| state.child(note(name).max_w(px(260.)).truncate()))
+                    .child(widgets::pill(label, tone))
+            });
         TitleBar::new().bg(color(theme::SURFACE)).child(brand).child(state)
     }
 

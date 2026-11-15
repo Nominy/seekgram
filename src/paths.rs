@@ -31,3 +31,7 @@ pub fn runtime_dir() -> PathBuf { data_dir().join("runtime") }
 pub fn model_dir() -> PathBuf { data_dir().join("model") }
 /// Scratch space for media being indexed; emptied at service start.
 pub fn temp_dir() -> PathBuf { data_dir().join("tmp") }
+/// When the last check for a new version succeeded (`src/service/update.rs`).
+pub fn update_file() -> PathBuf { data_dir().join("update.json") }
+/// What Seekgram Setup's install, update and uninstall steps did (`src/install.rs`).
+pub fn install_log() -> PathBuf { logs_dir().join("install.log") }

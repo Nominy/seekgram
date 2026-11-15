@@ -12,6 +12,7 @@ pub mod search;
 pub mod state;
 pub mod telegram;
 pub mod tray;
+pub mod update;
 pub mod workers;
 
 use std::{fs, io::{BufRead, BufReader, Write}, sync::Arc, time::Duration};
@@ -36,7 +37,7 @@ pub fn hidden(command: &mut tokio::process::Command) -> &mut tokio::process::Com
 const LOG_LIMIT: u64 = 5 * 1024 * 1024;
 
 /// `2026-01-31T12:34:56Z` from the system clock, without a date library.
-fn timestamp() -> String {
+pub(crate) fn timestamp() -> String {
     let seconds = state::unix_now();
     let (days, rest) = (seconds / 86_400, seconds % 86_400);
     // Civil-from-days (Howard Hinnant's algorithm), valid for the whole Unix era.
@@ -83,6 +84,10 @@ fn redirect_stderr() -> Result<(), String> {
 #[cfg(not(windows))]
 fn redirect_stderr() -> Result<(), String> { Ok(()) }
 
+/// The job `own_children` made, kept so `release_children` can change it.
+#[cfg(windows)]
+static JOB: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+
 /// Puts the service in a job that Windows ends when the service does, however it ends.
 /// Without it a killed or crashed service leaves its model workers and ffmpeg running,
 /// holding the GPU and locking files an update needs to replace.
@@ -100,12 +105,30 @@ fn own_children() -> Result<(), String> {
         limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
         SetInformationJobObject(job, JobObjectExtendedLimitInformation, std::ptr::from_ref(&limits).cast(), size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32)
             .map_err(|e| format!("cannot configure the process group: {e}"))?;
-        AssignProcessToJobObject(job, GetCurrentProcess()).map_err(|e| format!("cannot join the process group: {e}"))
+        AssignProcessToJobObject(job, GetCurrentProcess()).map_err(|e| format!("cannot join the process group: {e}"))?;
+        let _ = JOB.set(job.0 as usize);
+        Ok(())
     }
 }
 
 #[cfg(not(windows))]
 fn own_children() -> Result<(), String> { Ok(()) }
+
+/// Lets processes started from now on outlive the service (Velopack's updater). Children
+/// already in the job still end with it.
+#[cfg(windows)]
+fn release_children() {
+    use windows::Win32::{Foundation::HANDLE, System::JobObjects::{JobObjectExtendedLimitInformation, SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK}};
+    let Some(&job) = JOB.get() else { return };
+    let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK;
+    // SAFETY: the job handle is still open (it is never closed) and the structure is correctly sized.
+    let changed = unsafe { SetInformationJobObject(HANDLE(job as *mut _), JobObjectExtendedLimitInformation, std::ptr::from_ref(&limits).cast(), size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32) };
+    if let Err(error) = changed { eprintln!("Seekgram: cannot release the process group: {error}"); }
+}
+
+#[cfg(not(windows))]
+fn release_children() {}
 
 /// Runs the service until it is asked to stop. Returns the process exit code.
 pub fn main() -> i32 {
@@ -139,6 +162,7 @@ pub fn main() -> i32 {
     runtime.shutdown_timeout(Duration::from_secs(5));
     eprintln!("Seekgram stopped");
     drop(lock);
+    update::apply_pending();
     code
 }
 
@@ -154,6 +178,7 @@ async fn run() -> Result<(), String> {
         tokio::spawn(provision::run(shared.clone())),
         tokio::spawn(account::run(shared.clone(), workers.clone(), commands)),
         tokio::spawn(indexer::run(shared.clone(), workers.clone())),
+        tokio::spawn(update::run(shared.clone())),
     ];
     tokio::task::spawn_blocking(cache::enforce);
     tray::spawn(shared.clone());

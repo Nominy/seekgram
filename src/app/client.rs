@@ -94,6 +94,10 @@ impl Client {
         self.post("/api/settings", Some(json!({"autostart": autostart})))
     }
 
+    pub fn set_check_updates(&self, check_updates: bool) -> Reply {
+        self.post("/api/settings", Some(json!({"check_updates": check_updates})))
+    }
+
     pub fn set_mcp(&self, mcp: bool) -> Reply {
         self.post("/api/settings", Some(json!({"mcp": mcp})))
     }

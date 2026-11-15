@@ -7,9 +7,12 @@ mod autostart;
 mod cli;
 mod config;
 mod embed;
+mod install;
 mod paths;
 mod service;
 
 fn main() {
+    // Seekgram Setup's install, update and uninstall callbacks exit here.
+    install::handle_setup_events();
     std::process::exit(cli::run());
 }
