@@ -82,6 +82,30 @@ fn redirect_stderr() -> Result<(), String> {
 #[cfg(not(windows))]
 fn redirect_stderr() -> Result<(), String> { Ok(()) }
 
+/// Puts the service in a job that Windows ends when the service does, however it ends.
+/// Without it a killed or crashed service leaves its Python and ffmpeg children running,
+/// holding the GPU and locking files an update needs to replace.
+#[cfg(windows)]
+fn own_children() -> Result<(), String> {
+    use windows::Win32::System::{
+        JobObjects::{AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation, SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE},
+        Threading::GetCurrentProcess,
+    };
+    // SAFETY: plain Win32 calls with a correctly sized, initialised structure. The job
+    // handle is leaked on purpose: closing it, at process exit, is what ends the children.
+    unsafe {
+        let job = CreateJobObjectW(None, None).map_err(|e| format!("cannot create the process group: {e}"))?;
+        let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        SetInformationJobObject(job, JobObjectExtendedLimitInformation, std::ptr::from_ref(&limits).cast(), size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32)
+            .map_err(|e| format!("cannot configure the process group: {e}"))?;
+        AssignProcessToJobObject(job, GetCurrentProcess()).map_err(|e| format!("cannot join the process group: {e}"))
+    }
+}
+
+#[cfg(not(windows))]
+fn own_children() -> Result<(), String> { Ok(()) }
+
 /// Runs the service until it is asked to stop. Returns the process exit code.
 pub fn main() -> i32 {
     if let Err(error) = fs::create_dir_all(paths::data_dir()) {
@@ -97,7 +121,7 @@ pub fn main() -> i32 {
         eprintln!("Seekgram is already running.");
         return 2;
     }
-    if let Err(error) = redirect_stderr() {
+    if let Err(error) = redirect_stderr().and_then(|()| own_children()) {
         eprintln!("Seekgram: {error}");
         return 1;
     }
