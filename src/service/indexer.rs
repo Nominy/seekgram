@@ -1258,7 +1258,8 @@ impl Session {
         Ok(())
     }
 
-    /// Every dialog of the account, once each.
+    /// Every dialog of the account, once each, except the private search group: it only
+    /// holds copies of results, and indexing those would return them as results again.
     async fn chats(&self) -> Result<Vec<ChatRef>, Fault> {
         let mut dialogs = self.client.iter_dialogs();
         let mut seen = HashSet::new();
@@ -1271,7 +1272,7 @@ impl Session {
                 None => continue,
             };
             let id = marked_id(dialog.chat());
-            if seen.insert(id) {
+            if self.shared.settings().search_chat != Some(id) && seen.insert(id) {
                 chats.push(ChatRef { id, title: dialog.chat().name().to_owned(), peer: dialog.chat().pack(), top: dialog.raw.top_message() });
             }
         }
