@@ -26,6 +26,36 @@ fn open_panel() {
     }
 }
 
+/// "Quit Seekgram" means all of it: open control panels are closed too, not left showing
+/// a stopped service. A panel is any visible window of another process running this same
+/// program; the service itself has no visible window.
+#[cfg(windows)]
+fn close_panels() {
+    use windows::{core::BOOL, Win32::{Foundation::{CloseHandle, HWND, LPARAM, WPARAM}, System::Threading::{OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION}, UI::WindowsAndMessaging::{EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_CLOSE}}};
+    unsafe extern "system" fn visit(window: HWND, _: LPARAM) -> BOOL {
+        // SAFETY: called by EnumWindows with a valid window handle; the process handle is closed.
+        unsafe {
+            if !IsWindowVisible(window).as_bool() { return BOOL(1); }
+            let mut pid = 0;
+            GetWindowThreadProcessId(window, Some(&mut pid));
+            if pid == 0 || pid == std::process::id() { return BOOL(1); }
+            let Ok(process) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else { return BOOL(1) };
+            let mut buffer = [0u16; 1024];
+            let mut length = buffer.len() as u32;
+            let named = QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, windows::core::PWSTR(buffer.as_mut_ptr()), &mut length).is_ok();
+            let _ = CloseHandle(process);
+            let ours = named && std::env::current_exe().is_ok_and(|exe| std::path::PathBuf::from(String::from_utf16_lossy(&buffer[..length as usize])) == exe);
+            if ours { let _ = PostMessageW(Some(window), WM_CLOSE, WPARAM(0), LPARAM(0)); }
+            BOOL(1)
+        }
+    }
+    // SAFETY: EnumWindows only calls `visit` during this call.
+    let _ = unsafe { EnumWindows(Some(visit), LPARAM(0)) };
+}
+
+#[cfg(not(windows))]
+fn close_panels() {}
+
 /// One line saying what Seekgram is doing, shown when the pointer rests on the icon.
 fn summary(status: &Status) -> String {
     let doing = if status.account.step != AccountStep::Ready {
@@ -73,7 +103,10 @@ fn run(shared: Arc<Shared>) -> Result<(), String> {
         INDEXING => {
             if let Err(error) = actions.set_settings(|settings| settings.indexing = !settings.indexing) { eprintln!("Tray: {error}"); }
         }
-        QUIT => { actions.shutdown.send_replace(true); }
+        QUIT => {
+            close_panels();
+            actions.shutdown.send_replace(true);
+        }
         _ => {}
     }));
     TrayIconEvent::set_event_handler(Some(|event: TrayIconEvent| {

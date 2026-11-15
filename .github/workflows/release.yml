@@ -47,7 +47,12 @@ jobs:
         run: |
           mkdir -p dist/package
           cp target/release/seekgram.exe LICENSE README.md dist/package/
-          (cd dist/package && 7z a -tzip -mx=9 ../seekgram-windows-x64.zip seekgram.exe LICENSE README.md)
+          # ONNX Runtime needs the Visual C++ runtime. Shipping Microsoft's redistributable DLLs
+          # next to seekgram.exe (app-local deployment) means no PC has to have it installed.
+          crt="$(ls -d "/c/Program Files/Microsoft Visual Studio"/*/*/VC/Redist/MSVC/14.*/x64/Microsoft.VC14*.CRT | sort -V | tail -1)"
+          echo "C++ runtime from $crt"
+          for dll in msvcp140.dll msvcp140_1.dll vcruntime140.dll vcruntime140_1.dll; do cp "$crt/$dll" dist/package/; done
+          (cd dist/package && 7z a -tzip -mx=9 ../seekgram-windows-x64.zip *)
           rm -r dist/package
           cp install.ps1 dist/
           cd dist

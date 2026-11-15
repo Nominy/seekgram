@@ -124,7 +124,7 @@ async fn settings(State(state): State<AppState>, Json(body): Json<Value>) -> Rep
     let mut merged = serde_json::to_value(state.shared.settings()).map_err(|error| failed(error.to_string()))?;
     for (key, value) in changes {
         // The search chat is only ever set by Seekgram itself, after checking the chat is private.
-        if key == "search_chat" || merged.get(key).is_none() { return Err(refused(format!("Unknown setting: {key}"))); }
+        if matches!(key.as_str(), "search_chat" | "search_group") || merged.get(key).is_none() { return Err(refused(format!("Unknown setting: {key}"))); }
         merged[key] = value.clone();
     }
     let new: Settings = serde_json::from_value(merged).map_err(|_| refused("A setting has the wrong kind of value."))?;
@@ -140,12 +140,15 @@ async fn settings(State(state): State<AppState>, Json(body): Json<Value>) -> Rep
 
 async fn search_chat_create(State(state): State<AppState>) -> Reply {
     let telegram = state.shared.telegram().await.map_err(refused)?;
-    chat_search::create_group(&state.shared, &telegram).await.map_err(failed)?;
+    chat_search::use_group(&state.shared, &telegram).await.map_err(failed)?;
     Ok(Json(state.shared.status()))
 }
 
 async fn search_chat_saved(State(state): State<AppState>) -> Reply {
-    state.shared.set_settings(|settings| settings.search_chat = None).map_err(failed)?;
+    state.shared.set_settings(|settings| {
+        if settings.search_chat.is_some() { settings.search_group = settings.search_chat; }
+        settings.search_chat = None;
+    }).map_err(failed)?;
     Ok(Json(state.shared.status()))
 }
 

@@ -120,7 +120,7 @@ impl Panel {
             (place, change)
         } else {
             let change = Button::new("create-search-group")
-                .label("Create a private Search group")
+                .label(if status.settings.search_group.is_some() { "Use the Search group again" } else { "Create a private Search group" })
                 .on_click(cx.listener(|panel, _, window, cx| panel.create_search_group(window, cx)));
             ("Saved Messages".to_owned(), change)
         };

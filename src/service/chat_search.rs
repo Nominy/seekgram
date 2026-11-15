@@ -63,8 +63,22 @@ async fn open_home(shared: &Shared, service: &TelegramService, me: &User) -> Opt
     }
 }
 
+/// Answers searches in a private group: the one used before, if it still exists and is
+/// still only the user's, otherwise a newly created one.
+pub async fn use_group(shared: &Shared, service: &TelegramService) -> Result<(), String> {
+    if let Some(id) = shared.settings().search_group {
+        let me = service.account_id().await?;
+        if let Ok(chat) = service.resolve(&id.to_string()).await {
+            if private_to(service, &chat, me).await.is_ok() {
+                return shared.set_settings(|settings| settings.search_chat = Some(id));
+            }
+        }
+    }
+    create_group(shared, service).await
+}
+
 /// Creates a private group for searching and makes it the search chat.
-pub async fn create_group(shared: &Shared, service: &TelegramService) -> Result<(), String> {
+async fn create_group(shared: &Shared, service: &TelegramService) -> Result<(), String> {
     let updates = service.client.invoke(&tl::functions::channels::CreateChannel {
         broadcast: false, megagroup: true, for_import: false, forum: false,
         title: "Search".to_owned(), about: "Seekgram media search. Send ? for help.".to_owned(),
@@ -77,7 +91,8 @@ pub async fn create_group(shared: &Shared, service: &TelegramService) -> Result<
     };
     let id = chats.iter().find_map(|chat| match chat { tl::enums::Chat::Channel(channel) => Some(channel.id), _ => None })
         .ok_or("Telegram created the group but did not say which one; send ?here in it to use it")?;
-    shared.set_settings(|settings| settings.search_chat = Some(-1_000_000_000_000 - id))
+    let group = -1_000_000_000_000 - id;
+    shared.set_settings(|settings| { settings.search_chat = Some(group); settings.search_group = Some(group); })
 }
 
 /// Whether `chat` may become the search chat: Saved Messages, or a group with no member
@@ -145,7 +160,11 @@ pub async fn run(shared: Arc<Shared>, service: Arc<TelegramService>, workers: Ar
             let saved = matches!(&chat, Chat::User(user) if user.id() == me_id);
             let target = (!saved).then(|| marked_id(&chat));
             let moved = match private_to(&service, &chat, me_id).await {
-                Ok(()) => shared.set_settings(|settings| settings.search_chat = target),
+                Ok(()) => shared.set_settings(|settings| {
+                    if target.is_some() { settings.search_group = target; }
+                    else if settings.search_chat.is_some() { settings.search_group = settings.search_chat; }
+                    settings.search_chat = target;
+                }),
                 Err(error) => Err(error),
             };
             let reply = match moved {

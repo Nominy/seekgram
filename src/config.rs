@@ -22,6 +22,9 @@ pub struct Settings {
     pub concurrency: u8,
     /// Chat where `?` searches are answered: `None` is Saved Messages, otherwise a marked chat ID.
     pub search_chat: Option<i64>,
+    /// The private group last used for searching. Kept while searches go to Saved Messages,
+    /// so switching back reuses it instead of creating another group.
+    pub search_group: Option<i64>,
     /// Start the service when the user logs in to Windows.
     pub autostart: bool,
     /// Serve the MCP endpoint for AI agents. Off by default: most users never need it.
@@ -30,7 +33,7 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { port: DEFAULT_PORT, indexing: true, workers: 0, concurrency: 6, search_chat: None, autostart: true, mcp: false }
+        Self { port: DEFAULT_PORT, indexing: true, workers: 0, concurrency: 6, search_chat: None, search_group: None, autostart: true, mcp: false }
     }
 }
 

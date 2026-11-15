@@ -210,6 +210,9 @@ function Install-Seekgram {
         Stop-Running
         New-Item -ItemType Directory -Force -Path $installDir | Out-Null
         Copy-Item -Force $binary $exe
+        # The Visual C++ runtime DLLs shipped in the release zip, used by the model runtime.
+        Get-ChildItem -Path (Join-Path (Split-Path -Parent $binary) '*.dll') -ErrorAction SilentlyContinue |
+            Copy-Item -Destination $installDir -Force
         # Keep a copy of this script for "Apps & features" -> Uninstall.
         $selfCopy = Join-Path $installDir 'install.ps1'
         if ($ScriptPath -and ($ScriptPath -ine $selfCopy)) {

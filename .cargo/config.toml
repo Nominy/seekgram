@@ -1,0 +1,4 @@
+# seekgram.exe carries its own C runtime, so it starts on a PC without the Visual C++
+# redistributable. ONNX Runtime still needs the DLLs; the release zip ships them.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
