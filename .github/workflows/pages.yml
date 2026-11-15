@@ -1,0 +1,53 @@
+# Publishes site/ plus the installer to https://nominy.github.io/seekgram/
+# (Settings -> Pages -> Source: GitHub Actions).
+name: Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - site/**
+      - install.ps1
+      - assets/brand/seekgram-mark.svg
+      - assets/app/seekgram-256.png
+      - .github/workflows/pages.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+      # The site's real address: nominy.github.io/seekgram, or the account's
+      # custom domain when it has one. Canonical/OG/sitemap URLs must use it.
+      - id: pages
+        uses: actions/configure-pages@v6
+      - name: Assemble site
+        env:
+          SITE_URL: ${{ steps.pages.outputs.base_url }}
+        run: |
+          mkdir _site
+          cp -R site/. _site/
+          cp install.ps1 _site/install.ps1
+          cp assets/brand/seekgram-mark.svg _site/logo.svg
+          cp assets/app/seekgram-256.png _site/icon.png
+          lastmod="$(date -u +%F)"
+          sed -i -e "s#__SITE_URL__#${SITE_URL%/}#g" -e "s#__LASTMOD__#$lastmod#g" _site/index.html _site/sitemap.xml
+          ! grep -rl "__SITE_URL__\|__LASTMOD__" _site
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+      - id: deploy
+        uses: actions/deploy-pages@v5

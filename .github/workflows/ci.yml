@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
+
+      - name: Build
+        run: cargo build --locked
+
+      - name: Test
+        run: cargo nextest run --locked --no-tests=warn
+
+  installer:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      # Users pipe the script into Windows PowerShell 5.1, so parse it with both.
+      - name: Parse install.ps1 (PowerShell 7)
+        shell: pwsh
+        run: |
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile("$PWD/install.ps1", [ref]$null, [ref]$errors) | Out-Null
+          if ($errors) { $errors | ForEach-Object { Write-Error $_.ToString() }; exit 1 }
+      - name: Parse install.ps1 (Windows PowerShell 5.1)
+        shell: powershell
+        run: |
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile("$PWD/install.ps1", [ref]$null, [ref]$errors) | Out-Null
+          if ($errors) { $errors | ForEach-Object { Write-Error $_.ToString() }; exit 1 }
+      # 5.1 reads a piped script as ANSI, so anything outside ASCII would be garbled.
+      - name: install.ps1 is ASCII
+        shell: pwsh
+        run: |
+          $bad = [IO.File]::ReadAllBytes("$PWD/install.ps1") | Where-Object { $_ -gt 127 }
+          if ($bad) { Write-Error "install.ps1 contains $(@($bad).Count) non-ASCII bytes"; exit 1 }

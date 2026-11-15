@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Seekgram — Search Your Telegram Photos, Videos and Audio by Meaning</title>
+  <meta name="description" content="Free, open-source app for Windows that finds any photo, video or voice message in your Telegram account by describing it. Runs entirely on your own PC with an NVIDIA graphics card.">
+  <link rel="canonical" href="__SITE_URL__/">
+  <meta name="color-scheme" content="dark light">
+  <meta name="theme-color" content="#0b1a2a" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#f5f9fd" media="(prefers-color-scheme: light)">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Seekgram">
+  <meta property="og:title" content="Seekgram — search your Telegram media by meaning">
+  <meta property="og:description" content="Type ?pink dragon in a Telegram chat and get the pictures back. A local model on your own PC does the looking; nothing is uploaded.">
+  <meta property="og:url" content="__SITE_URL__/">
+  <meta property="og:image" content="__SITE_URL__/icon.png">
+  <meta property="og:image:width" content="256">
+  <meta property="og:image:height" content="256">
+  <meta property="og:image:alt" content="Seekgram logo: a magnifier with a paper plane in its lens">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Seekgram — search your Telegram media by meaning">
+  <meta name="twitter:description" content="Type ?pink dragon in a Telegram chat and get the pictures back. Runs on your own PC.">
+  <meta name="twitter:image" content="__SITE_URL__/icon.png">
+  <link rel="icon" href="icon.png">
+  <link rel="apple-touch-icon" href="icon.png">
+  <link rel="preload" href="fonts/Sora.woff2" as="font" type="font/woff2" crossorigin>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "Seekgram",
+    "description": "A free, open-source Windows app that indexes the photos, videos and audio of your Telegram account with a local model and lets you search them by meaning from a Telegram chat.",
+    "url": "__SITE_URL__/",
+    "image": "__SITE_URL__/icon.png",
+    "applicationCategory": "UtilitiesApplication",
+    "applicationSubCategory": "Media search",
+    "operatingSystem": "Windows 10, Windows 11",
+    "downloadUrl": "https://github.com/Nominy/seekgram/releases/latest",
+    "license": "https://opensource.org/licenses/MIT",
+    "isAccessibleForFree": true,
+    "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+    "author": { "@type": "Person", "name": "Nominy", "url": "https://github.com/Nominy" },
+    "sameAs": ["https://github.com/Nominy/seekgram"]
+  }
+  </script>
+  <style>
+    :root {
+      --bg: #0b1a2a; --panel: #0f2740; --line: #ffffff1a; --line-strong: #ffffff40; --text: #eef7ff; --muted: #9db4c8;
+      --accent: #8fd3fb; --accent-hover: #b3e2fd; --on-accent: #071629; --well: #071629; --chip: #ffffff10;
+      --mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+      --display: "Sora", Inter, -apple-system, "Segoe UI", system-ui, sans-serif;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f5f9fd; --panel: #ffffff; --line: #0f274022; --line-strong: #0f274055; --text: #0f2740; --muted: #4d667d;
+        --accent: #1f69a8; --accent-hover: #175a93; --on-accent: #ffffff; --well: #0f2740; --chip: #0f274012;
+      }
+    }
+    @font-face { font-family: "Sora"; src: url("fonts/Sora.woff2") format("woff2"); font-weight: 100 800; font-display: swap; }
+    * { box-sizing: border-box; }
+    html { background: var(--bg); scroll-behavior: smooth; }
+    body { margin: 0; color: var(--text); font: 16px/1.6 Inter, -apple-system, "Segoe UI", system-ui, sans-serif; background: var(--bg); min-height: 100vh; }
+    a { color: inherit; }
+    .wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+    nav { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; padding: 22px 0; }
+    .brand { display: flex; align-items: center; gap: 10px; font: 600 18px var(--display); letter-spacing: -.2px; text-decoration: none; }
+    .brand img { width: 26px; height: 26px; }
+    nav .links { display: flex; flex-wrap: wrap; gap: 6px 22px; color: var(--muted); font-size: 15px; }
+    nav .links a { text-decoration: none; } nav .links a:hover { color: var(--text); }
+
+    header { text-align: center; padding: 64px 0 28px; }
+    header .mark { width: 104px; height: 104px; }
+    h1 { font-family: var(--display); font-size: clamp(38px, 6vw, 66px); line-height: 1.05; margin: 10px 0 14px; letter-spacing: -2px; font-weight: 600; }
+    h1 span { color: var(--accent); }
+    .lede { color: var(--muted); font-size: 19px; max-width: 660px; margin: 0 auto; }
+    .kicker { margin: 22px 0 0; color: var(--accent); font: 600 13px var(--display); letter-spacing: 1.6px; text-transform: uppercase; }
+
+    .install { max-width: 680px; margin: 40px auto 0; }
+    .or { color: var(--muted); font: 600 12px var(--display); letter-spacing: 1.4px; text-transform: uppercase; margin: 0 0 10px; }
+    .cmd { display: flex; align-items: center; gap: 12px; background: var(--well); border: 1px solid var(--line); padding: 14px 14px 14px 18px; text-align: left; }
+    .cmd code { flex: 1; font: 15px/1.4 var(--mono); color: #eef7ff; overflow-x: auto; white-space: nowrap; }
+    .cmd code::before { content: "> "; color: #8fd3fb; }
+    .copy { all: unset; cursor: pointer; font-size: 13px; color: #9db4c8; padding: 6px 10px; border: 1px solid #ffffff1a; }
+    .copy:hover, .copy:focus-visible { color: #eef7ff; border-color: #ffffff40; }
+    .hint { color: var(--muted); font-size: 14px; margin-top: 12px; }
+    .hint a, .sub a, .card a, .faq a, .plain a { color: var(--accent); text-decoration: none; }
+    .hint a:hover, .sub a:hover, .card a:hover, .faq a:hover, .plain a:hover { text-decoration: underline; }
+
+    h2 { font: 600 clamp(24px, 3vw, 30px)/1.2 var(--display); letter-spacing: -.6px; margin: 0 0 8px; }
+    .sub { color: var(--muted); margin: 0 0 22px; max-width: 700px; }
+    section.block { margin: 0 0 80px; scroll-margin-top: 20px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+    .card { background: var(--panel); border: 1px solid var(--line); padding: 20px 22px; }
+    .card h3 { margin: 0 0 6px; font: 600 16px var(--display); }
+    .card p { margin: 0; color: var(--muted); font-size: 15px; }
+    .card .k { display: block; color: var(--accent); font: 600 13px var(--mono); margin-bottom: 8px; }
+    code, kbd { font: 13px var(--mono); color: var(--text); background: var(--chip); padding: 1px 6px; }
+    .cmd code { background: none; padding: 0; }
+
+    .plain { margin: 0; padding: 0; list-style: none; display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 10px 28px; }
+    .plain li { color: var(--muted); padding-left: 18px; position: relative; }
+    .plain li::before { content: ""; position: absolute; left: 0; top: .62em; width: 7px; height: 7px; background: var(--accent); }
+    .plain b { color: var(--text); font-weight: 600; }
+
+    .sheet { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); }
+    .sheet td { padding: 12px 18px; border-top: 1px solid var(--line); vertical-align: top; color: var(--muted); font-size: 15px; }
+    .sheet tr:first-child td { border-top: 0; }
+    .sheet td:first-child { white-space: nowrap; width: 1%; color: var(--text); }
+    @media (max-width: 560px) { .sheet td { display: block; width: auto !important; } .sheet td + td { border-top: 0; padding-top: 0; } }
+
+    .faq details { background: var(--panel); border: 1px solid var(--line); margin-bottom: 8px; }
+    .faq summary { cursor: pointer; padding: 15px 20px; font: 600 16px var(--display); list-style: none; display: flex; justify-content: space-between; gap: 16px; }
+    .faq summary::-webkit-details-marker { display: none; }
+    .faq summary::after { content: "+"; color: var(--accent); font-weight: 400; }
+    .faq details[open] summary::after { content: "−"; }
+    .faq details p { margin: 0; padding: 0 20px 18px; color: var(--muted); }
+
+    footer { border-top: 1px solid var(--line); padding: 26px 0 40px; color: var(--muted); font-size: 14px; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+    footer a { text-decoration: none; } footer a:hover { color: var(--text); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <nav>
+      <a class="brand" href="./"><img src="logo.svg" alt="" width="26" height="26">Seekgram</a>
+      <div class="links">
+        <a href="#how">How it works</a>
+        <a href="#search">Search</a>
+        <a href="#privacy">Privacy</a>
+        <a href="#faq">FAQ</a>
+        <a href="https://github.com/Nominy/seekgram">GitHub</a>
+      </div>
+    </nav>
+
+    <header>
+      <img class="mark" src="logo.svg" alt="Seekgram logo" width="104" height="104">
+      <p class="kicker">Free, open-source media search for Telegram, on Windows</p>
+      <h1>Find it by <span>describing it.</span></h1>
+      <p class="lede">Seekgram finds any photo, video or voice message in your Telegram account from a few words about what is in it. It runs on your own PC, and you search from a Telegram chat on any of your devices.</p>
+
+      <div class="install">
+        <p class="or">Install from PowerShell</p>
+        <div class="cmd">
+          <code id="cmd-text">irm https://nominy.github.io/seekgram/install.ps1 | iex</code>
+          <button class="copy" id="copy" type="button">Copy</button>
+        </div>
+        <p class="hint">Press <kbd>Win</kbd>, type <em>PowerShell</em>, press <kbd>Enter</kbd>, paste the line and press <kbd>Enter</kbd> again. It downloads the latest release, checks its checksum and installs without admin rights. The first start then downloads the search model and its tools, about 6-7 GB. <a href="https://github.com/Nominy/seekgram#install">Options &amp; uninstall</a></p>
+      </div>
+    </header>
+
+    <!-- SCREENSHOT PLACEHOLDER (begin)
+         A screenshot of a search result album in Telegram next to the Seekgram window goes here
+         once one exists: add site/screenshot.jpg (and .webp), put a <section class="shot"> with a
+         <picture> element in this spot, and point og:image / twitter:image at it
+         (switch twitter:card to summary_large_image).
+         SCREENSHOT PLACEHOLDER (end) -->
+
+    <section class="block" id="how" style="margin-top: 64px">
+      <h2>How it works</h2>
+      <p class="sub">Three steps, and the second one you only do once.</p>
+      <div class="grid">
+        <div class="card"><span class="k">1</span><h3>Install</h3><p>Paste the line above into PowerShell. Seekgram installs for your Windows user, starts with Windows and stays out of the way in the background.</p></div>
+        <div class="card"><span class="k">2</span><h3>Log in to Telegram</h3><p>The Seekgram window asks for your free API key from <a href="https://my.telegram.org">my.telegram.org</a>, your phone number and the login code, the same way a new Telegram app would. Then it starts going through your chats.</p></div>
+        <div class="card"><span class="k">3</span><h3>Search from a chat</h3><p>Send <code>?pink dragon</code> to your Saved Messages, from your phone or your PC. The ten best matches come back as an album, each with a link to the original message.</p></div>
+      </div>
+    </section>
+
+    <section class="block" id="search">
+      <h2>Search cheat sheet</h2>
+      <p class="sub">Every search is a message that starts with <code>?</code>, sent in your search chat: Saved Messages, or a private group of your own that the app can create for you.</p>
+      <table class="sheet">
+        <tr><td><code>?pink dragon</code></td><td>Find pictures by words. Describe what is in them.</td></tr>
+        <tr><td><code>?video cat on a skateboard</code></td><td>Find videos instead.</td></tr>
+        <tr><td><code>?audio rain</code></td><td>Find voice messages and audio.</td></tr>
+        <tr><td>a photo with the caption <code>?</code></td><td>Find pictures similar to that one. An album mixes its photos into one search.</td></tr>
+        <tr><td><code>?</code> in reply to a photo</td><td>More like that photo. Works on a result you got earlier too.</td></tr>
+        <tr><td><code>?in snow</code> as caption or reply</td><td>The photo plus the words: like this one, but in snow.</td></tr>
+        <tr><td><code>?more</code></td><td>The next ten results.</td></tr>
+        <tr><td><code>?7</code></td><td>Forward result number 7 itself, so you can jump to its chat.</td></tr>
+        <tr><td><code>?here</code></td><td>Sent in a group where you are the only member: answer searches there from now on.</td></tr>
+        <tr><td><code>?</code></td><td>Show this list in Telegram.</td></tr>
+      </table>
+    </section>
+
+    <section class="block" id="requirements">
+      <h2>What you need</h2>
+      <p class="sub">Seekgram runs a real AI model on your own computer, so it is pickier than most apps.</p>
+      <ul class="plain">
+        <li><b>Windows 10 or 11</b>, 64-bit. There is no macOS or Linux version.</li>
+        <li><b>An NVIDIA graphics card</b> with 4 GB of memory or more and a current driver. AMD and Intel graphics do not work.</li>
+        <li><b>About 12 GB of free disk space</b> for the model, its tools and the index.</li>
+        <li><b>A Telegram account</b>, and a free API key from <a href="https://my.telegram.org">my.telegram.org</a> (it takes a minute to create).</li>
+        <li><b>Patience the first time.</b> Going through a large account takes hours to days. You can search what is already indexed while it runs.</li>
+      </ul>
+    </section>
+
+    <section class="block" id="privacy">
+      <h2>Private by construction</h2>
+      <p class="sub">Seekgram logs in as you and can see everything you can, so this is exactly what it does with that.</p>
+      <div class="grid">
+        <div class="card"><h3>Everything runs on your PC</h3><p>The model that looks at your media runs on your own graphics card. There is no Seekgram server and no account with us.</p></div>
+        <div class="card"><h3>Media is not kept</h3><p>Each photo, video or audio file is downloaded temporarily, turned into a list of numbers (a vector) and deleted. The index stores only those vectors and message IDs. A small, size-capped cache holds what a search needs to answer.</p></div>
+        <div class="card"><h3>Nothing leaves your PC</h3><p>Seekgram talks to Telegram, and once to GitHub, PyPI/PyTorch and Hugging Face to download its model and tools. Nothing about you or your media is sent to anyone else. No telemetry.</p></div>
+        <div class="card"><h3>Your login is protected</h3><p>The Telegram login session and your API key are stored encrypted for your Windows user. Uninstalling with the purge option deletes them along with the index.</p></div>
+      </div>
+    </section>
+
+    <section class="block faq" id="faq">
+      <h2>Questions</h2>
+      <p class="sub">Anything else? <a href="https://github.com/Nominy/seekgram/issues">Open an issue on GitHub</a>.</p>
+      <details>
+        <summary>How long does indexing take?</summary>
+        <p>Hours to days, depending on how much media your account has and how fast your graphics card is. It runs in the background, pauses when Telegram asks it to slow down, and picks up where it left off after a restart. You can search what is already indexed at any time, and you can switch indexing off in the app when you need the graphics card for something else.</p>
+      </details>
+      <details>
+        <summary>Does it read my messages?</summary>
+        <p>It goes through every chat to find photos, videos and audio. Message text is not stored: the index holds only vectors and the IDs of the messages the media came from.</p>
+      </details>
+      <details>
+        <summary>Can it send messages as me?</summary>
+        <p>Only search results, and only into your own private search chat: Saved Messages, or a group in which you are the only member. It never writes anywhere else. If you later add someone to that group, they will see your results, so keep it to yourself.</p>
+      </details>
+      <details>
+        <summary>Is it safe to give it my Telegram login?</summary>
+        <p>Seekgram is a full Telegram client: it logs in as your account, like Telegram Desktop does. Install it only from this page or from <a href="https://github.com/Nominy/seekgram/releases">the official releases</a>; the code is open for anyone to check. You can end its session at any time in Telegram under <em>Settings → Devices</em>.</p>
+      </details>
+      <details>
+        <summary>What if I edit or delete something in Telegram?</summary>
+        <p>New media is picked up as indexing continues. Edits and deletions are not yet synced: a deleted message can still show up as a search result that no longer opens.</p>
+      </details>
+      <details>
+        <summary>Why only Windows and NVIDIA?</summary>
+        <p>The model needs a graphics card to be fast enough to get through a whole account, and Windows with NVIDIA is the one combination that is built and tested today.</p>
+      </details>
+      <details>
+        <summary>Can AI agents use my index?</summary>
+        <p>Optionally. An MCP endpoint for AI agents is built in but switched off; it is under <em>Settings → Advanced</em> in the app. See the <a href="https://github.com/Nominy/seekgram#for-ai-agents-optional">README</a>.</p>
+      </details>
+      <details>
+        <summary>How do I remove it?</summary>
+        <p>Use <em>Settings → Apps → Seekgram → Uninstall</em>. That keeps your Telegram login, index and the downloaded model in <code>%LOCALAPPDATA%\Seekgram</code>, so a reinstall continues where you left off. To delete those as well, run this in PowerShell instead: <code>&amp; ([scriptblock]::Create((irm https://nominy.github.io/seekgram/install.ps1))) -Uninstall -Purge</code></p>
+      </details>
+    </section>
+
+    <footer>
+      <span>Seekgram · free and open source (MIT) · not affiliated with Telegram</span>
+      <span><a href="https://github.com/Nominy/seekgram/releases">Releases</a> · <a href="https://github.com/Nominy/seekgram">GitHub</a></span>
+    </footer>
+  </div>
+
+  <script>
+    const copy = document.getElementById("copy");
+    copy.onclick = async () => {
+      await navigator.clipboard.writeText(document.getElementById("cmd-text").textContent);
+      copy.textContent = "Copied";
+      setTimeout(() => (copy.textContent = "Copy"), 1400);
+    };
+  </script>
+</body>
+</html>

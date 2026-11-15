@@ -1,0 +1,49 @@
+[package]
+name = "seekgram"
+version = "0.1.0"
+edition = "2024"
+description = "Search your Telegram photos, videos and audio by meaning, on your own PC"
+license = "MIT"
+repository = "https://github.com/Nominy/seekgram"
+default-run = "seekgram"
+
+[dependencies]
+anyhow = "1"
+axum = "0.8"
+fs2 = "0.4"
+futures = "0.3"
+grammers-client = "=0.7.0"
+grammers-session = "=0.7.0"
+grammers-mtsender = "=0.7.0"
+gpui = { package = "gpui-pre", version = "=0.3.10" }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.10" }
+gpui-component = "=0.8.1"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
+mime_guess = "=2.0.5"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream", "blocking"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+subtle = "2.6"
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
+uuid = { version = "1", features = ["v4"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security_Cryptography",
+    "Win32_System_Console",
+] }
+winreg = "0.55"
+
+[build-dependencies]
+embed-resource = "3"
+
+[profile.release]
+strip = true
+
+# The UI is unusably slow unoptimized; keep dev builds snappy.
+[profile.dev.package."*"]
+opt-level = 3

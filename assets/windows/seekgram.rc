@@ -1,0 +1,38 @@
+// 1: app icon (gpui loads id 1 for the window; Explorer and the taskbar use it too).
+1 ICON "assets/app/seekgram.ico"
+
+// Version details: Task Manager and the Startup apps list show "Seekgram" for the
+// background service instead of a bare file name, and install.ps1 reads the version
+// from here. SEEKGRAM_MAJOR/MINOR/PATCH come from Cargo.toml through build.rs.
+#define SEEKGRAM_STR2(x) #x
+#define SEEKGRAM_STR(x) SEEKGRAM_STR2(x)
+#define SEEKGRAM_VERSION SEEKGRAM_STR(SEEKGRAM_MAJOR) "." SEEKGRAM_STR(SEEKGRAM_MINOR) "." SEEKGRAM_STR(SEEKGRAM_PATCH)
+
+1 VERSIONINFO
+FILEVERSION SEEKGRAM_MAJOR, SEEKGRAM_MINOR, SEEKGRAM_PATCH, 0
+PRODUCTVERSION SEEKGRAM_MAJOR, SEEKGRAM_MINOR, SEEKGRAM_PATCH, 0
+FILEFLAGSMASK 0x3fL
+FILEFLAGS 0x0L
+FILEOS 0x40004L
+FILETYPE 0x1L
+FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "CompanyName", "Nominy\0"
+            VALUE "FileDescription", "Seekgram\0"
+            VALUE "FileVersion", SEEKGRAM_VERSION "\0"
+            VALUE "InternalName", "seekgram\0"
+            VALUE "LegalCopyright", "Copyright (c) 2026 Nominy. MIT license.\0"
+            VALUE "OriginalFilename", "seekgram.exe\0"
+            VALUE "ProductName", "Seekgram\0"
+            VALUE "ProductVersion", SEEKGRAM_VERSION "\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END
