@@ -1,17 +1,21 @@
-[package]
-name = "seekgram"
+[workspace]
+members = ["crates/*"]
+resolver = "3"
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
-description = "Search your Telegram photos, videos and audio by meaning, on your own PC"
 license = "MIT"
 repository = "https://github.com/Nominy/seekgram"
-default-run = "seekgram"
 
-[dependencies]
+[workspace.dependencies]
+seekgram-core = { path = "crates/seekgram-core" }
+seekgram-service = { path = "crates/seekgram-service" }
+seekgram-embed = { path = "crates/seekgram-embed" }
+seekgram-app = { path = "crates/seekgram-app" }
 anyhow = "1"
 axum = "0.8"
 fs2 = "0.4"
-futures = "0.3"
 grammers-client = "=0.7.0"
 grammers-session = "=0.7.0"
 grammers-mtsender = "=0.7.0"
@@ -40,8 +44,6 @@ tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "process"
 uuid = { version = "1", features = ["v4"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 velopack = "=1.2.161"
-
-[target.'cfg(windows)'.dependencies]
 windows = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Graphics_Dxgi",
@@ -55,12 +57,46 @@ windows = { version = "0.61", features = [
 winreg = "0.55"
 tray-icon = { version = "0.21", default-features = false }
 
+[package]
+name = "seekgram"
+description = "Search your Telegram photos, videos and audio by meaning, on your own PC"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+default-run = "seekgram"
+
+[dependencies]
+seekgram-core.workspace = true
+seekgram-service.workspace = true
+seekgram-embed.workspace = true
+seekgram-app.workspace = true
+reqwest.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows.workspace = true
+
 [build-dependencies]
 embed-resource = "3"
 
 [profile.release]
 strip = true
 
-# The UI is unusably slow unoptimized; keep dev builds snappy.
+# The UI is unusably slow unoptimized; keep dev builds snappy. Dependencies carry no
+# debug info: nobody steps into them, and it is most of the link and PDB time.
 [profile.dev.package."*"]
 opt-level = 3
+debug = false
+
+# Our own crates: line tables are enough for backtraces and cost far less to emit and link.
+[profile.dev]
+debug = "line-tables-only"
+
+# Release-like local test builds that relink in seconds: `cargo build --profile fast`.
+# Ship with `--release`.
+[profile.fast]
+inherits = "release"
+incremental = true
+codegen-units = 256
+lto = false
+strip = true

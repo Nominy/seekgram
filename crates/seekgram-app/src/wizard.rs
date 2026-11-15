@@ -13,7 +13,7 @@ use gpui_component::{
     spinner::Spinner,
 };
 
-use crate::service::state::{AccountStep, Status};
+use seekgram_core::status::{AccountStep, Status};
 
 use super::{
     panel::{Control, Panel},

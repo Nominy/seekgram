@@ -18,11 +18,11 @@ use gpui_component::{
     spinner::Spinner,
 };
 
-use crate::{
-    cli,
+use seekgram_core::{
+    control,
     config::{Secrets, Settings},
     paths,
-    service::{state::{AccountStep, IndexerState, SetupState, Status}, update},
+    status::{AccountStep, IndexerState, SetupState, Status, describe_status},
 };
 
 use super::{
@@ -240,12 +240,12 @@ impl Panel {
         }
     }
 
-    /// Starts the background service. `cli::start_service` blocks until the service
+    /// Starts the background service. `control::start_service` blocks until the service
     /// answers or 20 seconds have passed, so it runs off the UI thread; the poll loop
     /// notices on its own when the service is up.
     fn launch(&mut self, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
-            let outcome = cx.background_executor().spawn(async { cli::start_service() }).await;
+            let outcome = cx.background_executor().spawn(async { control::start_service() }).await;
             if let Err(reason) = outcome {
                 this.update(cx, |panel, cx| {
                     if let Link::Starting { problem, .. } = &mut panel.link {
@@ -567,7 +567,7 @@ impl Panel {
             .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child("Seekgram"));
         // One line while a new version is being checked for, downloaded or installed, on every page.
         let updating = match (&self.link, &self.status) {
-            (Link::Connected { .. }, Some(status)) => update::describe_status(&status.update),
+            (Link::Connected { .. }, Some(status)) => describe_status(&status.update),
             _ => None,
         };
         let state = row()

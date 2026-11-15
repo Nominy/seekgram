@@ -267,6 +267,9 @@ cd seekgram
 cargo run --release
 ```
 
+`cargo build --profile fast` is a release-like build with incremental compilation and
+no LTO for local tests; ship with `--release`. Tests: `cargo nextest run --workspace`.
+
 Set `SEEKGRAM_DATA_DIR` to run a second, isolated instance next to an installed
 one while developing. A build run from `target\` does not update itself; only a
 copy installed with Seekgram Setup does. To try updates against a local folder of
@@ -278,17 +281,19 @@ service.
 
 | | |
 |--|--|
-| `src/service/` | the background service: Telegram, indexer, model workers, search, control API |
-| `src/app/` | the control panel ([GPUI](https://gpui.rs)) |
-| `src/embed/` | the model worker (`seekgram embed-worker`): preprocessing and ONNX Runtime |
+| `src/` | the binary: mode dispatch (`seekgram`, `seekgram service`, ...) |
+| `crates/seekgram-core/` | paths, settings, the status document and the control API client, shared by all |
+| `crates/seekgram-service/` | the background service: Telegram, indexer, model workers, search, control API |
+| `crates/seekgram-app/` | the control panel ([GPUI](https://gpui.rs)) |
+| `crates/seekgram-embed/` | the model worker (`seekgram embed-worker`): preprocessing and ONNX Runtime |
 | `assets/model/`, `assets/selftest/` | the model graphs and the self-test files, embedded in the binary |
-| `src/install.rs`, `src/service/update.rs` | Setup's install, update and uninstall steps; the automatic updates ([Velopack](https://velopack.io)) |
+| `crates/seekgram-service/src/install.rs`, `crates/seekgram-service/src/update.rs` | Setup's install, update and uninstall steps; the automatic updates ([Velopack](https://velopack.io)) |
 | `install.ps1` | the PowerShell install script |
 | `assets/brand/generate.py` | regenerates the logo, header pictures and icons |
 | `site/` | the website at nominy.github.io/seekgram |
 | `docs/ARCHITECTURE.md` | how the parts fit together |
 
-To release: bump `version` in `Cargo.toml`, commit, then
+To release: bump `version` in the root `Cargo.toml` (`[workspace.package]`), commit, then
 `git tag vX.Y.Z && git push --tags`. The *Release* workflow builds Windows x64,
 packs it with Velopack's `vpk` (with a delta from the previous release) and
 publishes the release with `Seekgram.App-win-Setup.exe`, the update packages,

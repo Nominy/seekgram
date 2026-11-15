@@ -6,6 +6,7 @@ pub mod api;
 pub mod cache;
 pub mod chat_search;
 pub mod indexer;
+pub mod install;
 pub mod mcp;
 pub mod provision;
 pub mod search;
@@ -15,12 +16,14 @@ pub mod tray;
 pub mod update;
 pub mod workers;
 
-use std::{fs, io::{BufRead, BufReader, Write}, sync::Arc, time::Duration};
+use std::{fs, io::{BufRead, BufReader, Write}, time::Duration};
 
 use fs2::FileExt;
 use tokio::sync::mpsc;
 
-use crate::{config::{Secrets, Settings}, paths};
+use seekgram_core::{config::{Secrets, Settings}, paths};
+use seekgram_core::{autostart, config};
+use seekgram_embed as embed;
 
 use state::Shared;
 
@@ -37,7 +40,7 @@ pub fn hidden(command: &mut tokio::process::Command) -> &mut tokio::process::Com
 const LOG_LIMIT: u64 = 5 * 1024 * 1024;
 
 /// `2026-01-31T12:34:56Z` from the system clock, without a date library.
-pub(crate) fn timestamp() -> String {
+pub fn timestamp() -> String {
     let seconds = state::unix_now();
     let (days, rest) = (seconds / 86_400, seconds % 86_400);
     // Civil-from-days (Howard Hinnant's algorithm), valid for the whole Unix era.

@@ -1,0 +1,16 @@
+[package]
+name = "seekgram-app"
+description = "The control panel (GPUI)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+seekgram-core.workspace = true
+anyhow.workspace = true
+gpui.workspace = true
+gpui_platform.workspace = true
+gpui-component.workspace = true
+reqwest.workspace = true
+serde_json.workspace = true

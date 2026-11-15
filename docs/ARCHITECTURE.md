@@ -18,14 +18,14 @@ up to date, a one-line installer, GitHub Pages site.
 | `seekgram start` / `stop` / `status` | Start the service detached / ask it to shut down / print status JSON. |
 | `seekgram embed-worker [--engine E] [--self-test]` | A model worker, started by the service (below). |
 | `seekgram --version`, `--help` | |
-| `seekgram --veloapp-install/-updated/-uninstall <version>` | Seekgram Setup's callbacks (`src/install.rs`); they exit at once. |
+| `seekgram --veloapp-install/-updated/-uninstall <version>` | Seekgram Setup's callbacks (`crates/seekgram-service/src/install.rs`); they exit at once. |
 
 The service does everything; the panel is only a view. They talk over loopback HTTP.
 
 ## Data directory
 
 Everything lives in `%LOCALAPPDATA%\Seekgram` (`SEEKGRAM_DATA_DIR` overrides it, for a
-second isolated instance during development). See `src/paths.rs`; use those functions,
+second isolated instance during development). See `crates/seekgram-core/src/paths.rs`; use those functions,
 never build paths by hand and never write next to the executable.
 
 ## Installing and updating
@@ -47,7 +47,7 @@ every update and deletes the whole folder on uninstall, which is why the pack id
   service is not asked to stop there; `install.ps1 -Uninstall` asks it (30 s) first.
 - After an interactive install, Setup starts `seekgram` (the panel, which starts the
   service) unless `SEEKGRAM_NO_LAUNCH` is set. `Setup.exe --silent` starts nothing.
-- `src/service/update.rs` owns `Status.update`. Two minutes after the service starts and
+- `crates/seekgram-service/src/update.rs` owns `Status.update`. Two minutes after the service starts and
   then every six hours since the last successful check (`update.json`), while
   `settings.check_updates` is on, it reads the release feed of the GitHub releases
   (pre-releases included), downloads a newer full or delta package into
@@ -63,29 +63,43 @@ every update and deletes the whole folder on uninstall, which is why the pack id
 
 ## Modules and owners
 
+A Cargo workspace, split so an edit recompiles only the crate it touches and those that
+depend on it. `seekgram-app` depends on `seekgram-core` only, never on the service or the
+model worker, so service edits do not recompile the GPUI panel.
+
+| Crate | Depends on | What |
+|--|--|--|
+| `seekgram` (root, `src/`) | all four | The one binary: mode dispatch. |
+| `seekgram-core` | | Paths, settings, autostart, the status document, the control API client. |
+| `seekgram-embed` | core | The model worker. |
+| `seekgram-service` | core, embed | The background service and Setup's callbacks. |
+| `seekgram-app` | core | The GPUI control panel. |
+
 | Path | What |
 |--|--|
 | `src/main.rs`, `src/cli.rs` | Mode dispatch, console attach, single-instance. |
-| `src/install.rs` | Seekgram Setup's install, update and uninstall callbacks. |
-| `src/paths.rs`, `src/config.rs` | Paths, `Settings` (JSON), `Secrets` (DPAPI). |
-| `src/service/state.rs` | `Shared`, `Status` and all its sections. **The contract.** |
-| `src/service/mod.rs` | Service lifecycle: lock, log, spawn tasks, shut down. |
-| `src/service/api.rs` | Control API (below) and mounting of `/mcp`. |
-| `src/service/account.rs` | Login state machine; owns `Status.account`. |
-| `src/service/telegram.rs`, `mcp.rs`, `search.rs`, `chat_search.rs`, `cache.rs` | Telegram client, MCP protocol, index search, chat search and the media cache. |
-| `src/service/provision.rs` | Gets ffmpeg, ONNX Runtime with DirectML and the model, picks the engine by self-test; owns `Status.setup`. |
-| `src/service/workers.rs` | Pool of model worker processes (`seekgram embed-worker`). |
-| `src/service/indexer.rs` | The indexer; owns `Status.indexer` and `Status.index`. |
-| `src/service/update.rs` | Automatic updates through Velopack; owns `Status.update`. |
-| `src/embed/` | The model worker: JSONL protocol, preprocessing, ONNX Runtime sessions, self-test. |
-| `src/app/` | The GPUI control panel. |
+| `crates/seekgram-service/src/install.rs` | Seekgram Setup's install, update and uninstall callbacks. |
+| `crates/seekgram-core/src/paths.rs`, `config.rs`, `autostart.rs` | Paths, `Settings` (JSON), `Secrets` (DPAPI), start at logon. |
+| `crates/seekgram-core/src/status.rs` | `Status` and all its sections. **The contract.** |
+| `crates/seekgram-core/src/control.rs` | Calls to the running service's control API; starting the service. |
+| `crates/seekgram-service/src/state.rs` | `Shared`: the service's live `Status`, secrets, Telegram client, shutdown. |
+| `crates/seekgram-service/src/lib.rs` | Service lifecycle: lock, log, spawn tasks, shut down. |
+| `crates/seekgram-service/src/api.rs` | Control API (below) and mounting of `/mcp`. |
+| `crates/seekgram-service/src/account.rs` | Login state machine; owns `Status.account`. |
+| `crates/seekgram-service/src/telegram.rs`, `mcp.rs`, `search.rs`, `chat_search.rs`, `cache.rs` | Telegram client, MCP protocol, index search, chat search and the media cache. |
+| `crates/seekgram-service/src/provision.rs` | Gets ffmpeg, ONNX Runtime with DirectML and the model, picks the engine by self-test; owns `Status.setup`. |
+| `crates/seekgram-service/src/workers.rs` | Pool of model worker processes (`seekgram embed-worker`). |
+| `crates/seekgram-service/src/indexer.rs` | The indexer; owns `Status.indexer` and `Status.index`. |
+| `crates/seekgram-service/src/update.rs` | Automatic updates through Velopack; owns `Status.update`. |
+| `crates/seekgram-embed/` | The model worker: JSONL protocol, preprocessing, ONNX Runtime sessions, self-test. |
+| `crates/seekgram-app/` | The GPUI control panel. |
 | `assets/model/` | The six model graphs (fp16 and fp32), embedded and written next to the downloaded weights. |
 | `assets/selftest/` | Self-test picture, sound and clip, and the reference vectors (`vectors.f32`). |
 | `install.ps1`, `site/`, `.github/`, `README.md`, `assets/` | Distribution. |
 
-## Shared state (`src/service/state.rs`)
+## Shared state (`crates/seekgram-core/src/status.rs`, `crates/seekgram-service/src/state.rs`)
 
-Read that file; it is short and is the contract. Rules:
+Read those files; they are short and are the contract. Rules:
 
 - A subsystem writes only its own `Status` section, through `shared.update(|s| ...)`.
 - User-facing strings in `Status` (`error`, `reason`, `detail`) are plain sentences a
@@ -99,7 +113,7 @@ Read that file; it is short and is the contract. Rules:
 ## Internal contracts between modules
 
 ```rust
-// src/service/provision.rs
+// crates/seekgram-service/src/provision.rs
 /// Runs until shutdown: prepares the model, then stays idle.
 /// Re-runs when `repair()` is called. Owns `Status.setup`.
 pub async fn run(shared: Arc<Shared>);
@@ -112,7 +126,7 @@ pub fn engine() -> Option<Engine>;
 pub fn ffmpeg() -> PathBuf;
 pub fn ffprobe() -> PathBuf;
 
-// src/service/workers.rs
+// crates/seekgram-service/src/workers.rs
 #[derive(Clone, Copy, PartialEq, Eq)] pub enum Kind { Text, Image, Audio, Video }
 pub enum EmbedError {
     /// This input cannot be embedded (corrupt file, no frames). Record it and move on.
@@ -134,7 +148,7 @@ impl Workers {
     pub async fn stop(&self);
 }
 
-// src/service/indexer.rs
+// crates/seekgram-service/src/indexer.rs
 /// Runs until shutdown. Indexes while settings.indexing && account ready && setup ready,
 /// otherwise sets Status.indexer.state = Off with a `reason` and waits on shared.changed.
 pub async fn run(shared: Arc<Shared>, workers: Arc<Workers>);
@@ -200,7 +214,7 @@ ask for next and `Status.account.error` why the last action failed.
 
 `paths::index_dir()/index.sqlite3`, unchanged from the prototype so an existing index
 can be moved in: tables `metadata`, `items`, `checkpoints`, `failures`, `sources`
-(schema in `src/service/indexer.rs`, `open_database`). Vectors are 768 little-endian
+(schema in `crates/seekgram-service/src/indexer.rs`, `open_database`). Vectors are 768 little-endian
 `f32`, L2-normalized. Model identity strings must stay byte-identical.
 
 ## Build and test

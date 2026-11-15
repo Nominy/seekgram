@@ -1,4 +1,6 @@
 # seekgram.exe carries its own C runtime, so it starts on a PC without the Visual C++
 # redistributable. ONNX Runtime still needs the DLLs; the release zip ships them.
+# rust-lld links several times faster than link.exe; the edit-build loop is mostly linking.
 [target.x86_64-pc-windows-msvc]
+linker = "rust-lld.exe"
 rustflags = ["-C", "target-feature=+crt-static"]

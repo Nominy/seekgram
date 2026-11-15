@@ -31,7 +31,17 @@ pub fn runtime_dir() -> PathBuf { data_dir().join("runtime") }
 pub fn model_dir() -> PathBuf { data_dir().join("model") }
 /// Scratch space for media being indexed; emptied at service start.
 pub fn temp_dir() -> PathBuf { data_dir().join("tmp") }
-/// When the last check for a new version succeeded (`src/service/update.rs`).
+/// When the last check for a new version succeeded (`crates/seekgram-service/src/update.rs`).
 pub fn update_file() -> PathBuf { data_dir().join("update.json") }
-/// What Seekgram Setup's install, update and uninstall steps did (`src/install.rs`).
+/// What Seekgram Setup's install, update and uninstall steps did (`crates/seekgram-service/src/install.rs`).
 pub fn install_log() -> PathBuf { logs_dir().join("install.log") }
+
+/// Paths of the prepared tools. Only valid once `Status.setup.state == Ready`.
+pub fn ffmpeg() -> PathBuf {
+    tools_dir().join("ffmpeg.exe")
+}
+
+pub fn ffprobe() -> PathBuf {
+    tools_dir().join("ffprobe.exe")
+}
+

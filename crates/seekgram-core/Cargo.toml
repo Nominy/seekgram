@@ -1,0 +1,17 @@
+[package]
+name = "seekgram-core"
+description = "Paths, settings, autostart, the status document and the control API client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows.workspace = true
+winreg.workspace = true

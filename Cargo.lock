@@ -6443,37 +6443,82 @@ dependencies = [
 name = "seekgram"
 version = "0.1.0"
 dependencies = [
- "anyhow",
- "axum",
  "embed-resource",
- "flate2",
- "fs2",
- "futures",
+ "reqwest",
+ "seekgram-app",
+ "seekgram-core",
+ "seekgram-embed",
+ "seekgram-service",
+ "windows 0.61.3",
+]
+
+[[package]]
+name = "seekgram-app"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
  "gpui-component",
  "gpui-pre",
  "gpui-pre-platform",
+ "reqwest",
+ "seekgram-core",
+ "serde_json",
+]
+
+[[package]]
+name = "seekgram-core"
+version = "0.1.0"
+dependencies = [
+ "reqwest",
+ "serde",
+ "serde_json",
+ "uuid",
+ "windows 0.61.3",
+ "winreg 0.55.0",
+]
+
+[[package]]
+name = "seekgram-embed"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "image",
+ "mozjpeg",
+ "mozjpeg-sys",
+ "ort",
+ "rustfft",
+ "seekgram-core",
+ "serde",
+ "serde_json",
+ "tokenizers",
+ "windows 0.61.3",
+]
+
+[[package]]
+name = "seekgram-service"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "flate2",
+ "fs2",
  "grammers-client",
  "grammers-mtsender",
  "grammers-session",
  "image",
  "mime_guess",
- "mozjpeg",
- "mozjpeg-sys",
- "ort",
  "reqwest",
  "rusqlite",
- "rustfft",
+ "seekgram-core",
+ "seekgram-embed",
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "subtle",
- "tokenizers",
  "tokio",
  "tray-icon",
  "uuid",
  "velopack",
  "windows 0.61.3",
- "winreg 0.55.0",
  "zip 2.6.1",
 ]
 

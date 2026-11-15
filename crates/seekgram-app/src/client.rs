@@ -8,7 +8,7 @@ use std::time::Duration;
 use reqwest::blocking::{RequestBuilder, Response};
 use serde_json::{Value, json};
 
-use crate::service::state::Status;
+use seekgram_core::status::Status;
 
 /// The status poll must fail fast so a stopped service is noticed within a few seconds.
 const STATUS_TIMEOUT: Duration = Duration::from_secs(4);

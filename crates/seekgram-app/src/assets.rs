@@ -10,7 +10,7 @@ use gpui::{AssetSource, SharedString};
 
 macro_rules! icons {
     ($($name:literal),* $(,)?) => {
-        &[$((concat!("icons/", $name, ".svg"), include_bytes!(concat!("../../assets/icons/", $name, ".svg")))),*]
+        &[$((concat!("icons/", $name, ".svg"), include_bytes!(concat!("../../../assets/icons/", $name, ".svg")))),*]
     };
 }
 

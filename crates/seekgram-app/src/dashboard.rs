@@ -10,7 +10,7 @@ use gpui_component::{
     switch::Switch,
 };
 
-use crate::service::state::{IndexCounts, Indexer, IndexerState, Setup, SetupState, SetupStep, Status, UpdateState};
+use seekgram_core::status::{IndexCounts, Indexer, IndexerState, Setup, SetupState, SetupStep, Status, UpdateState};
 
 use super::{
     format,

@@ -128,12 +128,12 @@ const WEIGHTS_FP32: [ModelFile; 3] = [
 /// encoder's rank-5 `MatMul`s as rank 3, see docs/ARCHITECTURE.md). Both rewrites are exact;
 /// the weights they point to are the repository's own.
 const GRAPH_FILES: [(&str, &[u8]); 6] = [
-    ("model_fp16.onnx", include_bytes!("../../assets/model/model_fp16.onnx")),
-    ("vision_encoder_fp16.onnx", include_bytes!("../../assets/model/vision_encoder_fp16.onnx")),
-    ("audio_encoder_fp16.onnx", include_bytes!("../../assets/model/audio_encoder_fp16.onnx")),
-    ("model.onnx", include_bytes!("../../assets/model/model.onnx")),
-    ("vision_encoder.onnx", include_bytes!("../../assets/model/vision_encoder.onnx")),
-    ("audio_encoder.onnx", include_bytes!("../../assets/model/audio_encoder.onnx")),
+    ("model_fp16.onnx", include_bytes!("../../../assets/model/model_fp16.onnx")),
+    ("vision_encoder_fp16.onnx", include_bytes!("../../../assets/model/vision_encoder_fp16.onnx")),
+    ("audio_encoder_fp16.onnx", include_bytes!("../../../assets/model/audio_encoder_fp16.onnx")),
+    ("model.onnx", include_bytes!("../../../assets/model/model.onnx")),
+    ("vision_encoder.onnx", include_bytes!("../../../assets/model/vision_encoder.onnx")),
+    ("audio_encoder.onnx", include_bytes!("../../../assets/model/audio_encoder.onnx")),
 ];
 
 const GIB: u64 = 1 << 30;
@@ -216,14 +216,7 @@ fn set_engine(engine: Option<Engine>) {
     *ENGINE.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = engine;
 }
 
-/// Paths of the prepared tools. Only valid once `Status.setup.state == Ready`.
-pub fn ffmpeg() -> PathBuf {
-    paths::tools_dir().join("ffmpeg.exe")
-}
-
-pub fn ffprobe() -> PathBuf {
-    paths::tools_dir().join("ffprobe.exe")
-}
+pub use paths::{ffmpeg, ffprobe};
 
 fn marker_file() -> PathBuf {
     paths::data_dir().join("ready.json")

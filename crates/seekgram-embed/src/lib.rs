@@ -28,7 +28,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::{paths, service::provision};
+use seekgram_core::paths;
 
 use media::MediaError;
 use model::{Item, Model, Provider};
@@ -140,7 +140,7 @@ impl Worker {
         };
         let environment = model::runtime(&paths::runtime_dir(), engine.directml()).map_err(LoadError::Runtime)?;
         let model = Model::load(&environment, &directory, engine.suffix(), provider).map_err(LoadError::Session)?;
-        Ok(Self { model, _environment: environment, extractor: audio::Extractor::new(), ffmpeg: provision::ffmpeg(), device })
+        Ok(Self { model, _environment: environment, extractor: audio::Extractor::new(), ffmpeg: paths::ffmpeg(), device })
     }
 
     /// Validates a request as the Python worker did, preprocesses and embeds it.
@@ -293,11 +293,11 @@ fn serve(engine: Engine) -> Result<()> {
 /// that counts as the same result. Audio is held to a lower bar: the old worker's bfloat16
 /// rounding moves audio vectors the most (down to 0.9976 on the spike's test set).
 const SELF_TEST_TEXT: &str = "a bear looking at the camera";
-const SELF_TEST_IMAGE: &[u8] = include_bytes!("../../assets/selftest/image.png");
-const SELF_TEST_AUDIO: &[u8] = include_bytes!("../../assets/selftest/audio.ogg");
-const SELF_TEST_VIDEO: &[u8] = include_bytes!("../../assets/selftest/video.mp4");
+const SELF_TEST_IMAGE: &[u8] = include_bytes!("../../../assets/selftest/image.png");
+const SELF_TEST_AUDIO: &[u8] = include_bytes!("../../../assets/selftest/audio.ogg");
+const SELF_TEST_VIDEO: &[u8] = include_bytes!("../../../assets/selftest/video.mp4");
 /// Four 768-float little-endian vectors: text, image, audio, video.
-const SELF_TEST_VECTORS: &[u8] = include_bytes!("../../assets/selftest/vectors.f32");
+const SELF_TEST_VECTORS: &[u8] = include_bytes!("../../../assets/selftest/vectors.f32");
 
 fn reference(index: usize) -> Vec<f32> {
     SELF_TEST_VECTORS[index * DIMENSION * 4..(index + 1) * DIMENSION * 4]

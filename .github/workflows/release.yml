@@ -1,7 +1,7 @@
 # Push a tag that matches Cargo.toml (e.g. v0.1.0) to build Windows x64, pack it with
 # Velopack (Seekgram Setup, the update packages and their feed) and publish a GitHub
 # release with those, the PowerShell installer and SHA256SUMS. Installed copies find the
-# next release through the feed (src/service/update.rs).
+# next release through the feed (crates/seekgram-service/src/update.rs).
 name: Release
 
 on:

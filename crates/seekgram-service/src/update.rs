@@ -191,17 +191,3 @@ pub fn apply_pending() {
     }
 }
 
-/// One line for the panel while something is happening; `None` when nothing is.
-pub fn describe_status(update: &Update) -> Option<String> {
-    let version = update.version.as_deref().unwrap_or("");
-    match update.state {
-        UpdateState::Idle => None,
-        UpdateState::Checking => Some("Checking for a new version".to_owned()),
-        UpdateState::Downloading => Some(match update.percent {
-            Some(percent) => format!("Downloading Seekgram {version} ({percent}%)"),
-            None => format!("Downloading Seekgram {version}"),
-        }),
-        UpdateState::Ready => Some(format!("Installing Seekgram {version}; it restarts in a moment")),
-        UpdateState::Failed => Some(update.error.clone().unwrap_or_else(|| "The update failed. Seekgram tries again later.".to_owned())),
-    }
-}

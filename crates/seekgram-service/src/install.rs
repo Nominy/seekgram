@@ -27,7 +27,7 @@ fn log(line: &str) {
     let path = paths::install_log();
     if let Some(folder) = path.parent() { let _ = std::fs::create_dir_all(folder); }
     if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
-        let _ = writeln!(file, "{} {line}", crate::service::timestamp());
+        let _ = writeln!(file, "{} {line}", crate::timestamp());
     }
 }
 
