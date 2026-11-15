@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Seekgram — Search Your Telegram Photos, Videos and Audio by Meaning</title>
-  <meta name="description" content="Free, open-source app for Windows that finds any photo, video or voice message in your Telegram account by describing it. Runs entirely on your own PC with an NVIDIA graphics card.">
+  <meta name="description" content="Free, open-source app for Windows that finds any photo, video or voice message in your Telegram account by describing it. Runs entirely on your own PC.">
   <link rel="canonical" href="__SITE_URL__/">
   <meta name="color-scheme" content="dark light">
   <meta name="theme-color" content="#0b1a2a" media="(prefers-color-scheme: dark)">
@@ -145,7 +145,7 @@
           <code id="cmd-text">irm https://nominy.github.io/seekgram/install.ps1 | iex</code>
           <button class="copy" id="copy" type="button">Copy</button>
         </div>
-        <p class="hint">Press <kbd>Win</kbd>, type <em>PowerShell</em>, press <kbd>Enter</kbd>, paste the line and press <kbd>Enter</kbd> again. It downloads the latest release, checks its checksum and installs without admin rights. The first start then downloads the search model and its tools, about 5 GB. <a href="https://github.com/Nominy/seekgram#install">Options &amp; uninstall</a></p>
+        <p class="hint">Press <kbd>Win</kbd>, type <em>PowerShell</em>, press <kbd>Enter</kbd>, paste the line and press <kbd>Enter</kbd> again. It downloads the latest release, checks its checksum and installs without admin rights. The first start then downloads the search model and its tools, about 1.6 GB. <a href="https://github.com/Nominy/seekgram#install">Options &amp; uninstall</a></p>
       </div>
     </header>
 
@@ -188,8 +188,8 @@
       <p class="sub">Seekgram runs a real AI model on your own computer, so it is pickier than most apps.</p>
       <ul class="plain">
         <li><b>Windows 10 or 11</b>, 64-bit. There is no macOS or Linux version.</li>
-        <li><b>An NVIDIA graphics card</b> with 4 GB of memory or more and a current driver. AMD and Intel graphics do not work.</li>
-        <li><b>About 12 GB of free disk space</b> for the model, its tools and the index.</li>
+        <li><b>Any DirectX 12 graphics card</b> (NVIDIA, AMD or Intel); NVIDIA is no longer required. Without one the model runs on the processor: it works, but slowly.</li>
+        <li><b>About 6 GB of free disk space</b> for the model, its tools and the index. The first start downloads about 1.6 GB.</li>
         <li><b>A Telegram account</b>, and a free API key from <a href="https://my.telegram.org">my.telegram.org</a> (it takes a minute to create).</li>
         <li><b>Patience the first time.</b> Going through a large account takes hours to days. You can search what is already indexed while it runs.</li>
       </ul>
@@ -201,7 +201,7 @@
       <div class="grid">
         <div class="card"><h3>Everything runs on your PC</h3><p>The model that looks at your media runs on your own graphics card. There is no Seekgram server and no account with us.</p></div>
         <div class="card"><h3>Media is not kept</h3><p>Each photo, video or audio file is downloaded temporarily, turned into a list of numbers (a vector) and deleted. The index stores only those vectors and message IDs. A small, size-capped cache holds what a search needs to answer.</p></div>
-        <div class="card"><h3>Nothing leaves your PC</h3><p>Seekgram talks to Telegram, and once to GitHub, PyPI/PyTorch and Hugging Face to download its model and tools. Nothing about you or your media is sent to anyone else. No telemetry.</p></div>
+        <div class="card"><h3>Nothing leaves your PC</h3><p>Seekgram talks to Telegram, and once to GitHub, NuGet and Hugging Face to download its model and tools. Nothing about you or your media is sent to anyone else. No telemetry.</p></div>
         <div class="card"><h3>Your login is protected</h3><p>The Telegram login session and your API key are stored encrypted for your Windows user. Uninstalling with the purge option deletes them along with the index.</p></div>
       </div>
     </section>
@@ -230,8 +230,8 @@
         <p>New media is picked up as indexing continues. Edits and deletions are not yet synced: a deleted message can still show up as a search result that no longer opens.</p>
       </details>
       <details>
-        <summary>Why only Windows and NVIDIA?</summary>
-        <p>The model needs a graphics card to be fast enough to get through a whole account, and Windows with NVIDIA is the one combination that is built and tested today.</p>
+        <summary>Why only Windows?</summary>
+        <p>The model runs through DirectML, Microsoft's Windows-only graphics library, which works with NVIDIA, AMD and Intel cards. So far it has been tested on an NVIDIA card; if setup finds that your card cannot run the model correctly, Seekgram uses the processor instead and says so.</p>
       </details>
       <details>
         <summary>Can AI agents use my index?</summary>

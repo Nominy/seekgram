@@ -2,11 +2,12 @@
 
 Seekgram indexes the photos, videos and audio of a user's Telegram account with a
 local multimodal embedding model and lets them search it: from a Telegram chat of
-their own (`?pink dragon`), and through an MCP endpoint for AI agents. Windows with
-an NVIDIA GPU only, for now. Modelled on [Vitreus](https://github.com/Nominy/vitreus):
-one Rust binary, one-line installer, GitHub Pages site.
+their own (`?pink dragon`), and through an MCP endpoint for AI agents. Windows only;
+the model runs on any DirectX 12 GPU through DirectML, or on the CPU. Modelled on
+[Vitreus](https://github.com/Nominy/vitreus): one Rust binary, one-line installer,
+GitHub Pages site.
 
-## One binary, two roles
+## One binary, three roles
 
 `seekgram.exe` (built with `windows_subsystem = "windows"`):
 
@@ -15,6 +16,7 @@ one Rust binary, one-line installer, GitHub Pages site.
 | `seekgram` | The control panel (GPUI window). Starts the service if it is not running. |
 | `seekgram service` | The background service. Started at Windows logon (HKCU `Run` key). No window. |
 | `seekgram start` / `stop` / `status` | Start the service detached / ask it to shut down / print status JSON. |
+| `seekgram embed-worker [--engine E] [--self-test]` | A model worker, started by the service (below). |
 | `seekgram --version`, `--help` | |
 
 The service does everything; the panel is only a view. They talk over loopback HTTP.
@@ -36,11 +38,13 @@ never build paths by hand and never write next to the executable.
 | `src/service/api.rs` | Control API (below) and mounting of `/mcp`. |
 | `src/service/account.rs` | Login state machine; owns `Status.account`. |
 | `src/service/telegram.rs`, `mcp.rs`, `search.rs`, `chat_search.rs`, `cache.rs` | Telegram client, MCP protocol, index search, chat search and the media cache. |
-| `src/service/provision.rs` | Gets uv, ffmpeg, the Python environment and the model; owns `Status.setup`. |
-| `src/service/workers.rs` | Pool of Python model worker processes. |
+| `src/service/provision.rs` | Gets ffmpeg, ONNX Runtime with DirectML and the model, picks the engine by self-test; owns `Status.setup`. |
+| `src/service/workers.rs` | Pool of model worker processes (`seekgram embed-worker`). |
 | `src/service/indexer.rs` | The indexer; owns `Status.indexer` and `Status.index`. |
+| `src/embed/` | The model worker: JSONL protocol, preprocessing, ONNX Runtime sessions, self-test. |
 | `src/app/` | The GPUI control panel. |
-| `worker/` | `worker.py`, `pyproject.toml`, `uv.lock`: embedded in the binary, written to `paths::worker_dir()`. |
+| `assets/model/` | The six model graphs (fp16 and fp32), embedded and written next to the downloaded weights. |
+| `assets/selftest/` | Self-test picture, sound and clip, and the reference vectors (`vectors.f32`). |
 | `install.ps1`, `site/`, `.github/`, `README.md`, `assets/` | Distribution. |
 
 ## Shared state (`src/service/state.rs`)
@@ -60,18 +64,17 @@ Read that file; it is short and is the contract. Rules:
 
 ```rust
 // src/service/provision.rs
-/// Runs until shutdown: prepares the worker environment, then stays idle.
+/// Runs until shutdown: prepares the model, then stays idle.
 /// Re-runs when `repair()` is called. Owns `Status.setup`.
 pub async fn run(shared: Arc<Shared>);
 /// Asks `run` to verify and repair everything again (control API: POST /api/setup/repair).
 pub fn repair();
+/// The engine workers run on (`directml-fp16`, `directml-fp32` or `cpu-fp32`);
+/// `Some` only while `Status.setup.state == Ready`.
+pub fn engine() -> Option<Engine>;
 /// Paths of the prepared tools. Only valid once `Status.setup.state == Ready`.
-pub fn python() -> PathBuf;        // worker_dir()/.venv/Scripts/python.exe
-pub fn worker_script() -> PathBuf; // worker_dir()/worker.py
 pub fn ffmpeg() -> PathBuf;
 pub fn ffprobe() -> PathBuf;
-/// Environment for worker processes (HF_HOME = paths::models_dir(), HF_HUB_OFFLINE=1, ...).
-pub fn worker_env() -> Vec<(String, String)>;
 
 // src/service/workers.rs
 #[derive(Clone, Copy, PartialEq, Eq)] pub enum Kind { Text, Image, Audio, Video }
@@ -91,7 +94,7 @@ impl Workers {
     pub async fn embed(&self, request: Embed, urgent: bool) -> Result<Vec<f32>, EmbedError>;
     /// How many workers are loaded right now.
     pub fn loaded(&self) -> u32;
-    /// Stops all worker processes (shutdown, or to free VRAM when idle).
+    /// Stops all worker processes (shutdown, or to free memory when idle).
     pub async fn stop(&self);
 }
 
@@ -103,6 +106,35 @@ pub async fn run(shared: Arc<Shared>, workers: Arc<Workers>);
 
 `Arc<Workers>` is created once in `service/mod.rs` and also given to `search.rs` for
 query embeddings (`urgent = true`).
+
+## The model
+
+EmbeddingGemma 2 (`onnx-community/embeddinggemma-2-ONNX`, pinned revision) runs in
+ONNX Runtime 1.24.4 (its last DirectML build, loaded at run time from
+`paths::runtime_dir()`) inside `seekgram embed-worker` processes, so a driver fault
+cannot take the service down and stopping a worker frees its memory. Workers speak
+JSONL: `{"id","kind","input","start_seconds"?,"end_seconds"?}` in, `{"id","vector"}` or
+`{"id","error":{"type","message","location"}}` out. Preprocessing (tokenizer, libjpeg
+decoding, torch's antialiased bicubic resize, log-mel features, ffmpeg's FFV1 round trip
+for video frames) reproduces the Python worker the index was built with bit for bit, so
+old and new vectors share the index under the same identity string.
+
+Setup downloads, each pinned by SHA-256 and resumable: ffmpeg (GitHub), `onnxruntime.dll`
+and `DirectML.dll` (only those zip members of their NuGet packages, by HTTP range), and
+`tokenizer.json` plus the fp16 weights (1.5 GB) into `paths::model_dir()`. The graphs
+come from `assets/model/`: the published ones with two exact rewrites DirectML needs in
+the vision and audio encoders (`Reshape` with `allowzero=1` becomes `allowzero=0`, the same
+as long as no target dimension is 0; the audio encoder's 24 rank-5 `MatMul`s are reshaped
+to rank 3 and back).
+
+An engine is ready only after `embed-worker --self-test` embeds the text, picture, sound
+and clip in `assets/selftest/` and matches the Python worker's vectors (cosine at least
+0.999, 0.995 for audio). Setup tries `directml-fp16`, then `directml-fp32`, then `cpu-fp32`
+(the fp32 weights, 2.9 GB, are downloaded only then) and shows the one in use in
+`Status.setup.detail`. `ready.json` in the data folder records the pins and the engine.
+DirectML uses the hardware adapter with the most dedicated memory. Once ready, what the
+Python setup left (`worker/`, `uv-cache/`, `tools/python`, `tools/uv.exe`, `models/`) is
+deleted.
 
 ## Control API
 
@@ -121,7 +153,7 @@ Loopback only (`127.0.0.1:<settings.port>`), JSON, every request needs
 | `POST /api/settings` | any subset of `Settings` fields | Change and persist settings. |
 | `POST /api/search_chat/create` | | Create a private group "Search" and answer searches there. |
 | `POST /api/search_chat/saved` | | Answer searches in Saved Messages again. |
-| `POST /api/setup/repair` | | Re-check and repair the model worker environment. |
+| `POST /api/setup/repair` | | Re-check and repair the model setup, and test the engines again. |
 | `POST /api/shutdown` | | Stop the service gracefully. |
 | `POST /mcp` | JSON-RPC | MCP Streamable HTTP for agents (same token). Answers 404 unless `settings.mcp` is on; it is off by default because most users are not programmers. |
 

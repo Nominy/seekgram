@@ -68,7 +68,6 @@ function Install-Seekgram {
     # ASCII only: Windows PowerShell 5.1 decodes piped and BOM-less scripts as ANSI.
     function Say([string] $text) { Write-Host '> ' -ForegroundColor Cyan -NoNewline; Write-Host $text }
     function Note([string] $text) { Write-Host "  $text" -ForegroundColor DarkGray }
-    function Warn([string] $text) { Write-Host '! ' -ForegroundColor Yellow -NoNewline; Write-Host $text -ForegroundColor Yellow }
 
     function Set-Value([string] $path, [string] $name, $value, $kind = [Microsoft.Win32.RegistryValueKind]::String) {
         $key = $hive.CreateSubKey($path)
@@ -156,21 +155,6 @@ function Install-Seekgram {
     # -------------------------------------------------------------- checks
 
     if (-not [Environment]::Is64BitOperatingSystem) { throw "$AppName needs 64-bit Windows." }
-    $gpu = $null
-    if (Get-Command nvidia-smi -ErrorAction SilentlyContinue) {
-        try {
-            $ErrorActionPreference = 'Continue'
-            $gpu = (& nvidia-smi --query-gpu=name --format=csv,noheader 2>$null | Select-Object -First 1)
-            if ($LASTEXITCODE -ne 0) { $gpu = $null }
-        } catch { $gpu = $null } finally { $ErrorActionPreference = 'Stop' }
-    }
-    if ($gpu) {
-        Note "Graphics card: $("$gpu".Trim())"
-    } else {
-        Warn 'No NVIDIA graphics card was found (nvidia-smi is missing or reports none).'
-        Warn "$AppName needs one with 4 GB of memory or more and a current NVIDIA driver to index and search."
-        Warn 'Installing anyway; the app will tell you again. Drivers: https://www.nvidia.com/drivers'
-    }
 
     # ------------------------------------------------------------- payload
 

@@ -12,7 +12,7 @@
 <p align="center">
   <a href="https://github.com/Nominy/seekgram/releases/latest"><img src="https://img.shields.io/github/v/release/Nominy/seekgram?style=flat-square&color=8fd3fb&labelColor=0f2740" alt="Latest release"></a>
   <a href="https://github.com/Nominy/seekgram/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Nominy/seekgram/ci.yml?branch=main&style=flat-square&labelColor=0f2740" alt="CI"></a>
-  <img src="https://img.shields.io/badge/platform-windows%20%2B%20nvidia-3a9fe0?style=flat-square&labelColor=0f2740" alt="Windows with an NVIDIA GPU">
+  <img src="https://img.shields.io/badge/platform-windows%2010%20%2F%2011-3a9fe0?style=flat-square&labelColor=0f2740" alt="Windows 10 or 11">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-3a9fe0?style=flat-square&labelColor=0f2740" alt="MIT license"></a>
 </p>
 
@@ -39,8 +39,8 @@ captions or file names. Nothing is uploaded anywhere.
 - **Search from Telegram itself.** Any of your devices, no extra app on your
   phone. Results arrive ten at a time as an album; each number under it opens the
   original message.
-- **Runs on your PC.** A local model on your NVIDIA graphics card does all the
-  looking. There is no Seekgram server and no account.
+- **Runs on your PC.** A local model on your graphics card (or, slowly, on the
+  processor) does all the looking. There is no Seekgram server and no account.
 - **Stores vectors, not media.** Files are downloaded temporarily, embedded and
   deleted. The index holds only vectors and message IDs.
 - **Stays out of the way.** A background service starts with Windows, indexes
@@ -60,7 +60,7 @@ The script downloads the latest release, verifies its checksum and installs it
 for your Windows user (no admin): Start menu, PATH, *Apps & features*, and a
 start at Windows logon. Then it opens Seekgram.
 
-The first start downloads the search model and its tools, **about 5 GB**, once.
+The first start downloads the search model and its tools, **about 1.6 GB**, once.
 The window shows the progress, and you can log in to Telegram in the meantime:
 
 1. Get a free API key at [my.telegram.org](https://my.telegram.org) (*API
@@ -145,9 +145,9 @@ seekgram start      # start it again
 ## Requirements
 
 - **Windows 10 or 11**, 64-bit. There is no macOS or Linux version.
-- **An NVIDIA graphics card** with 4 GB of memory or more and a current driver.
-  AMD and Intel graphics do not work. The installer warns you if it finds none.
-- **About 12 GB of free disk space** for the model, its tools and the index.
+- **A DirectX 12 graphics card** (NVIDIA, AMD or Intel) is recommended. Without
+  one the model runs on the processor, which works but is many times slower.
+- **About 6 GB of free disk space** for the model, its tools and the index.
 - **A Telegram account** and a free API key from
   [my.telegram.org](https://my.telegram.org).
 
@@ -176,8 +176,8 @@ What it does with that access:
   message IDs are stored. Message text and captions are not stored or logged. A
   size-capped cache holds the media a search needs to answer; it is safe to
   delete.
-- **Network traffic** goes to Telegram, and once to GitHub, PyPI/PyTorch and
-  Hugging Face to download the tools, the Python packages and the model. Nothing
+- **Network traffic** goes to Telegram, and once to GitHub, NuGet and Hugging
+  Face to download ffmpeg, ONNX Runtime with DirectML, and the model. Nothing
   else.
 - **It reads every chat, but writes to one.** It scans all your chats for media.
   It sends only search results, and only into your search chat: Saved Messages,
@@ -200,11 +200,12 @@ One program, `seekgram.exe`, in two roles:
   SQLite index and answers searches in your search chat.
 - **The control panel** (`seekgram`) is a small native window that shows the
   service's status and settings. It is only a view; closing it stops nothing.
-- **The local model** is Google's EmbeddingGemma, run by a small Python worker
-  on your graphics card. It turns pictures, video frames, audio and your search
-  words into vectors in the same space, so a search is a nearest-neighbour
-  lookup. Seekgram sets up the Python environment, ffmpeg and the model by
-  itself on first start.
+- **The local model** is Google's EmbeddingGemma 2, run through ONNX Runtime and
+  DirectML on your graphics card, in a worker process of `seekgram.exe`. It turns
+  pictures, video frames, audio and your search words into vectors in the same
+  space, so a search is a nearest-neighbour lookup. Seekgram downloads ffmpeg,
+  the runtime and the model by itself on first start; nothing else needs to be
+  installed.
 
 Everything it owns is in one folder, `%LOCALAPPDATA%\Seekgram`. The details are
 in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
@@ -265,7 +266,8 @@ one while developing.
 |--|--|
 | `src/service/` | the background service: Telegram, indexer, model workers, search, control API |
 | `src/app/` | the control panel ([GPUI](https://gpui.rs)) |
-| `worker/` | the Python model worker, embedded in the binary |
+| `src/embed/` | the model worker (`seekgram embed-worker`): preprocessing and ONNX Runtime |
+| `assets/model/`, `assets/selftest/` | the model graphs and the self-test files, embedded in the binary |
 | `install.ps1` | the install script |
 | `assets/brand/generate.py` | regenerates the logo, header pictures and icons |
 | `site/` | the website at nominy.github.io/seekgram |
