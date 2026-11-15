@@ -65,7 +65,7 @@ pub enum SetupStep {
     Ffmpeg,
     /// Installing Python and the model's packages (PyTorch with CUDA is about 3 GB).
     Packages,
-    /// Downloading the embedding model (about 3 GB).
+    /// Downloading the embedding model (about 1.5 GB).
     Model,
     /// Loading the model and embedding a test image, clip and sound.
     SelfTest,

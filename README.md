@@ -60,7 +60,7 @@ The script downloads the latest release, verifies its checksum and installs it
 for your Windows user (no admin): Start menu, PATH, *Apps & features*, and a
 start at Windows logon. Then it opens Seekgram.
 
-The first start downloads the search model and its tools, **about 6-7 GB**, once.
+The first start downloads the search model and its tools, **about 5 GB**, once.
 The window shows the progress, and you can log in to Telegram in the meantime:
 
 1. Get a free API key at [my.telegram.org](https://my.telegram.org) (*API

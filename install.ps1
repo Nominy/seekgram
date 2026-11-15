@@ -11,7 +11,7 @@
     Seekgram, where you log in to Telegram.
 
     The installer itself is small. On its first start Seekgram downloads the
-    search model and its tools (about 6-7 GB) and shows the progress.
+    search model and its tools (about 5 GB) and shows the progress.
 
     When piped into iex, configure with environment variables:
       $env:SEEKGRAM_VERSION = 'v0.1.0'     # default: latest
@@ -264,7 +264,7 @@ function Install-Seekgram {
         Say "Installed $AppName $installedVersion in $installDir"
         if (-not $upgrade) {
             Note 'On its first start Seekgram downloads the search model and its tools:'
-            Note 'about 6-7 GB, once. The window shows the progress; you can log in meanwhile.'
+            Note 'about 5 GB, once. The window shows the progress; you can log in meanwhile.'
         }
         Write-Host ''
         if ($NoLaunch) {

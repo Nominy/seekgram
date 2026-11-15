@@ -299,7 +299,7 @@ fn setup_step(step: SetupStep) -> (usize, &'static str) {
         SetupStep::Uv => (2, "Downloading the Python manager"),
         SetupStep::Ffmpeg => (3, "Downloading the video tools"),
         SetupStep::Packages => (4, "Installing the model's software (about 3 GB)"),
-        SetupStep::Model => (5, "Downloading the search model (about 3 GB)"),
+        SetupStep::Model => (5, "Downloading the search model (about 1.5 GB)"),
         SetupStep::SelfTest => (6, "Testing the model on your graphics card"),
     }
 }
