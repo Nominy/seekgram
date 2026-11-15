@@ -100,3 +100,13 @@ incremental = true
 codegen-units = 256
 lto = false
 strip = true
+
+# CI only builds and runs unit tests, which need no optimized dependencies; optimizing the
+# ~600 dependencies was most of a 10-45 minute CI build on GitHub's 4-core runners.
+[profile.ci]
+inherits = "dev"
+debug = false
+
+[profile.ci.package."*"]
+opt-level = 0
+debug = false

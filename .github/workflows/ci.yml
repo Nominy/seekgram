@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
 
+# A newer push supersedes a running check of the same branch.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -17,11 +22,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@nextest
 
-      - name: Build
-        run: cargo build --workspace --locked
-
-      - name: Test
-        run: cargo nextest run --workspace --locked --no-tests=warn
+      # nextest builds what it tests; a separate `cargo build` compiled everything twice.
+      # The `ci` profile leaves dependencies unoptimized (see Cargo.toml).
+      - name: Build and test
+        run: cargo nextest run --workspace --locked --cargo-profile ci --no-tests=warn
 
   installer:
     runs-on: windows-latest
