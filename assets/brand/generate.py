@@ -35,8 +35,10 @@ RIM = 372
 GLASS = 276
 HANDLE = ((706, 706), (912, 912))
 HANDLE_WIDTH = 150
-PLANE = [(246, 428), (626, 276), (540, 600), (404, 484)]
-PLANE_FOLD = [(404, 484), (414, 618), (478, 547)]
+# Placed by eye-weight, not by bounding box: the lens centre sits midway between the
+# plane's area centroid and the centre of its smallest enclosing circle.
+PLANE = [(211, 437), (591, 285), (505, 609), (369, 493)]
+PLANE_FOLD = [(369, 493), (379, 627), (443, 556)]
 # Under 32 px the rim and handle are drawn heavier so the lens stays a ring, not a blob.
 SMALL_GLASS = 250
 

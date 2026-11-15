@@ -4,6 +4,6 @@
   <line x1="706" y1="706" x2="912" y2="912" stroke="#1f69a8" stroke-width="150" stroke-linecap="round"/>
   <circle cx="432" cy="432" r="372" fill="#3a9fe0"/>
   <circle cx="432" cy="432" r="276" fill="#0f2740"/>
-  <polygon points="246,428 626,276 540,600 404,484" fill="#e4f6ff"/>
-  <polygon points="404,484 414,618 478,547" fill="#8fd3fb"/>
+  <polygon points="211,437 591,285 505,609 369,493" fill="#e4f6ff"/>
+  <polygon points="369,493 379,627 443,556" fill="#8fd3fb"/>
 </svg>
