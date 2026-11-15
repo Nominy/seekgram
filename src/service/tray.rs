@@ -1,0 +1,117 @@
+//! The notification-area icon: the visible sign that Seekgram is running in the
+//! background, and the quickest way to open the panel, pause indexing or quit.
+//!
+//! It belongs to the service, not the panel, so it is there from logon whether or not
+//! a window was ever opened. Windows requires the icon's owner to pump messages, so it
+//! lives on its own thread.
+
+use std::{sync::Arc, time::Duration};
+
+use tray_icon::{
+    menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
+    Icon, MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent,
+};
+
+use super::state::{AccountStep, IndexerState, SetupState, Shared, Status};
+
+const OPEN: &str = "open";
+const INDEXING: &str = "indexing";
+const QUIT: &str = "quit";
+
+/// Opens the control panel: this same program without arguments.
+fn open_panel() {
+    match std::env::current_exe() {
+        Ok(exe) => { if let Err(error) = std::process::Command::new(exe).spawn() { eprintln!("Tray: the panel could not be opened: {error}"); } }
+        Err(error) => eprintln!("Tray: the program file could not be found: {error}"),
+    }
+}
+
+/// One line saying what Seekgram is doing, shown when the pointer rests on the icon.
+fn summary(status: &Status) -> String {
+    let doing = if status.account.step != AccountStep::Ready {
+        "waiting for you to log in".to_owned()
+    } else if status.setup.state == SetupState::Failed {
+        "setup needs attention".to_owned()
+    } else if status.setup.state != SetupState::Ready {
+        "setting up the search model".to_owned()
+    } else {
+        match status.indexer.state {
+            IndexerState::Running | IndexerState::Starting => format!("indexing, chat {} of {}", status.indexer.chats_done + 1, status.indexer.chats_total.max(1)),
+            IndexerState::Idle => "up to date".to_owned(),
+            IndexerState::FloodWait => "paused by Telegram for a moment".to_owned(),
+            IndexerState::Failed => "indexing needs attention".to_owned(),
+            IndexerState::Off | IndexerState::Stopping => "indexing paused".to_owned(),
+        }
+    };
+    format!("Seekgram: {doing}")
+}
+
+fn indexing_label(on: bool) -> &'static str { if on { "Pause indexing" } else { "Resume indexing" } }
+
+#[cfg(windows)]
+fn run(shared: Arc<Shared>) -> Result<(), String> {
+    use windows::Win32::UI::WindowsAndMessaging::{DispatchMessageW, PeekMessageW, TranslateMessage, MSG, PM_REMOVE};
+
+    let open = MenuItem::with_id(OPEN, "Open Seekgram", true, None);
+    let indexing = MenuItem::with_id(INDEXING, indexing_label(shared.settings().indexing), true, None);
+    let quit = MenuItem::with_id(QUIT, "Quit Seekgram", true, None);
+    let menu = Menu::new();
+    menu.append_items(&[&open, &indexing, &PredefinedMenuItem::separator(), &quit]).map_err(|e| format!("the tray menu could not be built: {e}"))?;
+    // Resource 1 is the application icon embedded by build.rs.
+    let icon = Icon::from_resource(1, None).map_err(|e| format!("the tray icon could not be loaded: {e}"))?;
+    let tray = TrayIconBuilder::new()
+        .with_icon(icon)
+        .with_menu(Box::new(menu))
+        .with_menu_on_left_click(false)
+        .with_tooltip(summary(&shared.status()))
+        .build()
+        .map_err(|e| format!("the tray icon could not be shown: {e}"))?;
+
+    let actions = shared.clone();
+    MenuEvent::set_event_handler(Some(move |event: MenuEvent| match event.id.as_ref() {
+        OPEN => open_panel(),
+        INDEXING => {
+            if let Err(error) = actions.set_settings(|settings| settings.indexing = !settings.indexing) { eprintln!("Tray: {error}"); }
+        }
+        QUIT => { actions.shutdown.send_replace(true); }
+        _ => {}
+    }));
+    TrayIconEvent::set_event_handler(Some(|event: TrayIconEvent| {
+        if matches!(event, TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. }) { open_panel(); }
+    }));
+
+    let mut shown = (String::new(), true);
+    while !shared.stopping() {
+        // SAFETY: a standard message pump for this thread's own windows.
+        unsafe {
+            let mut message = MSG::default();
+            while PeekMessageW(&mut message, None, 0, 0, PM_REMOVE).as_bool() {
+                let _ = TranslateMessage(&message);
+                DispatchMessageW(&message);
+            }
+        }
+        let status = shared.status();
+        let now = (summary(&status), status.settings.indexing);
+        if now != shown {
+            let _ = tray.set_tooltip(Some(&now.0));
+            indexing.set_text(indexing_label(now.1));
+            shown = now;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    // Dropping the icon removes it at once instead of leaving a ghost until the pointer passes over it.
+    drop(tray);
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn run(_: Arc<Shared>) -> Result<(), String> { Ok(()) }
+
+/// Shows the icon until shutdown. A tray that cannot be shown is logged, not fatal:
+/// the panel and the service work without it.
+pub fn spawn(shared: Arc<Shared>) {
+    let spawned = std::thread::Builder::new().name("tray".into()).spawn(move || {
+        if let Err(error) = run(shared) { eprintln!("Tray: {error}"); }
+    });
+    if let Err(error) = spawned { eprintln!("Tray: the icon thread could not start: {error}"); }
+}

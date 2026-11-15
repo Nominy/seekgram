@@ -11,6 +11,7 @@ pub mod provision;
 pub mod search;
 pub mod state;
 pub mod telegram;
+pub mod tray;
 pub mod workers;
 
 use std::{fs, io::{BufRead, BufReader, Write}, sync::Arc, time::Duration};
@@ -155,6 +156,7 @@ async fn run() -> Result<(), String> {
         tokio::spawn(indexer::run(shared.clone(), workers.clone())),
     ];
     tokio::task::spawn_blocking(cache::enforce);
+    tray::spawn(shared.clone());
     let interrupted = shared.clone();
     tokio::spawn(async move {
         if tokio::signal::ctrl_c().await.is_ok() { interrupted.shutdown.send_replace(true); }

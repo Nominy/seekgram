@@ -78,10 +78,33 @@ fn report(result: Result<String, String>) -> i32 {
     }
 }
 
+/// Whether a panel is already open; if so it is brought to the front instead of opening
+/// a second window. The tray icon opens the panel on every click, so this matters.
+#[cfg(windows)]
+fn focus_existing_panel() -> bool {
+    use windows::{core::w, Win32::{Foundation::{GetLastError, ERROR_ALREADY_EXISTS}, System::Threading::CreateMutexW, UI::WindowsAndMessaging::{FindWindowW, IsIconic, SetForegroundWindow, ShowWindow, SW_RESTORE}}};
+    // SAFETY: plain Win32 calls. The mutex handle is leaked on purpose: it marks this
+    // process as the open panel until it exits.
+    unsafe {
+        if CreateMutexW(None, false, w!("Local\\SeekgramPanel")).is_err() || GetLastError() != ERROR_ALREADY_EXISTS { return false; }
+        if let Ok(window) = FindWindowW(None, w!("Seekgram")) {
+            if IsIconic(window).as_bool() { let _ = ShowWindow(window, SW_RESTORE); }
+            let _ = SetForegroundWindow(window);
+        }
+        true
+    }
+}
+
+#[cfg(not(windows))]
+fn focus_existing_panel() -> bool { false }
+
 pub fn run() -> i32 {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     match arguments.first().map(String::as_str) {
-        None => { crate::app::run(); 0 }
+        None => {
+            if !focus_existing_panel() { crate::app::run(); }
+            0
+        }
         Some("service") => crate::service::main(),
         Some(command) => {
             attach_console();
