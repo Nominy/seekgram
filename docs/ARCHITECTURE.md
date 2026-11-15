@@ -3,7 +3,7 @@
 Seekgram indexes the photos, videos and audio of a user's Telegram account with a
 local multimodal embedding model and lets them search it: from a Telegram chat of
 their own (`?pink dragon`), and through an MCP endpoint for AI agents. Windows with
-an NVIDIA GPU only, for now. Modelled on Vitreus (`C:/Users/User/Desktop/dev/picassa-rust`):
+an NVIDIA GPU only, for now. Modelled on [Vitreus](https://github.com/Nominy/vitreus):
 one Rust binary, one-line installer, GitHub Pages site.
 
 ## One binary, two roles
@@ -35,7 +35,7 @@ never build paths by hand and never write next to the executable.
 | `src/service/mod.rs` | Service lifecycle: lock, log, spawn tasks, shut down. |
 | `src/service/api.rs` | Control API (below) and mounting of `/mcp`. |
 | `src/service/account.rs` | Login state machine; owns `Status.account`. |
-| `src/service/telegram.rs`, `mcp.rs`, `search.rs`, `chat_search.rs`, `cache.rs` | Ported from the prototype (`D:/telegram/rust-server/src`). |
+| `src/service/telegram.rs`, `mcp.rs`, `search.rs`, `chat_search.rs`, `cache.rs` | Telegram client, MCP protocol, index search, chat search and the media cache. |
 | `src/service/provision.rs` | Gets uv, ffmpeg, the Python environment and the model; owns `Status.setup`. |
 | `src/service/workers.rs` | Pool of Python model worker processes. |
 | `src/service/indexer.rs` | The indexer; owns `Status.indexer` and `Status.index`. |
@@ -132,7 +132,7 @@ ask for next and `Status.account.error` why the last action failed.
 
 `paths::index_dir()/index.sqlite3`, unchanged from the prototype so an existing index
 can be moved in: tables `metadata`, `items`, `checkpoints`, `failures`, `sources`
-(schema in `D:/telegram/omni_index.py`, `open_database`). Vectors are 768 little-endian
+(schema in `src/service/indexer.rs`, `open_database`). Vectors are 768 little-endian
 `f32`, L2-normalized. Model identity strings must stay byte-identical.
 
 ## Build and test

@@ -114,8 +114,12 @@ const TAIL_LINES: usize = 40;
 
 static REPAIR: Notify = Notify::const_new();
 
+/// A failed setup is tried again by itself: the usual cause at logon is a network that
+/// is not up yet, and a user who never opens the panel would otherwise stay stuck.
+const RETRY_AFTER: Duration = Duration::from_secs(5 * 60);
+
 /// Runs until shutdown: prepares the worker environment, then stays idle.
-/// Re-runs when `repair()` is called. Owns `Status.setup`.
+/// Re-runs when `repair()` is called, and periodically after a failure. Owns `Status.setup`.
 pub async fn run(shared: Arc<Shared>) {
     let mut repairing = false;
     loop {
@@ -130,6 +134,7 @@ pub async fn run(shared: Arc<Shared>) {
             _ = shared.stopped() => return,
             outcome = prepare(&shared, repairing) => outcome,
         };
+        let failed = outcome.is_err();
         match &outcome {
             Ok(()) => eprintln!("Setup: ready"),
             Err(error) => eprintln!("Setup failed: {error}"),
@@ -155,6 +160,7 @@ pub async fn run(shared: Arc<Shared>) {
                 let _ = fs::remove_file(marker_file());
                 repairing = true;
             }
+            _ = tokio::time::sleep(RETRY_AFTER), if failed => repairing = false,
         }
     }
 }

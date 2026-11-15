@@ -268,14 +268,16 @@ function Install-Seekgram {
         }
         Write-Host ''
         if ($NoLaunch) {
-            Write-Host '  Open Seekgram from the Start menu, log in to Telegram, then send ' -NoNewline
+            Write-Host '  Open Seekgram from the Start menu.'
         } else {
             Say "Opening $AppName"
             Start-Process -FilePath $exe -WorkingDirectory $installDir
-            Write-Host '  Next: log in to Telegram in the window that opens, then send ' -NoNewline
         }
-        Write-Host '?pink dragon' -ForegroundColor White -NoNewline
-        Write-Host ' to your Saved Messages.'
+        if (-not $upgrade) {
+            Write-Host '  Next: log in to Telegram in the Seekgram window, then send ' -NoNewline
+            Write-Host '?pink dragon' -ForegroundColor White -NoNewline
+            Write-Host ' to your Saved Messages.'
+        }
         Write-Host ''
     } finally {
         Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
