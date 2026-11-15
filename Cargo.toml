@@ -20,12 +20,22 @@ gpui_platform = { package = "gpui-pre-platform", version = "=0.3.10" }
 gpui-component = "=0.8.1"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 mime_guess = "=2.0.5"
+# JPEG through libjpeg (the mozjpeg fork of libjpeg-turbo, as Pillow decodes it), so pixels
+# match the ones the index was built from. Plain C build, no NASM; `mozjpeg-sys` only to
+# let libjpeg errors unwind into a Rust error.
+mozjpeg = { version = "0.10", default-features = false, features = ["parallel"] }
+mozjpeg-sys = { version = "2", default-features = false, features = ["unwinding"] }
+# ONNX Runtime is loaded at run time from the downloaded onnxruntime.dll (DirectML build).
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "load-dynamic", "directml", "api-24"] }
+flate2 = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream", "blocking"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
+rustfft = "6"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 subtle = "2.6"
+tokenizers = { version = "0.23", default-features = false, features = ["onig"] }
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 uuid = { version = "1", features = ["v4"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
@@ -33,9 +43,11 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.61", features = [
     "Win32_Foundation",
+    "Win32_Graphics_Dxgi",
     "Win32_Security_Cryptography",
     "Win32_System_Console",
     "Win32_System_JobObjects",
+    "Win32_System_LibraryLoader",
     "Win32_System_Threading",
     "Win32_UI_WindowsAndMessaging",
 ] }

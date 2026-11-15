@@ -84,7 +84,7 @@ fn redirect_stderr() -> Result<(), String> {
 fn redirect_stderr() -> Result<(), String> { Ok(()) }
 
 /// Puts the service in a job that Windows ends when the service does, however it ends.
-/// Without it a killed or crashed service leaves its Python and ffmpeg children running,
+/// Without it a killed or crashed service leaves its model workers and ffmpeg running,
 /// holding the GPU and locking files an update needs to replace.
 #[cfg(windows)]
 fn own_children() -> Result<(), String> {

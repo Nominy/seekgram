@@ -16,7 +16,7 @@ pub struct Settings {
     pub port: u16,
     /// Whether the indexer should run whenever it can.
     pub indexing: bool,
-    /// Model worker processes; each holds the model in VRAM (about 3 GB). 0 picks from free VRAM.
+    /// Model worker processes; each holds its own copy of the model. 0 runs one.
     pub workers: u8,
     /// Media messages downloaded and prepared at once.
     pub concurrency: u8,

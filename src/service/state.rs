@@ -53,21 +53,20 @@ pub enum SetupState {
     Failed,
 }
 
-/// The step of preparing the model worker that is running or failed.
+/// The step of preparing the model that is running or failed.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SetupStep {
+    /// Looking for the graphics card.
     #[default]
     Checking,
-    /// Downloading the `uv` Python manager.
-    Uv,
     /// Downloading ffmpeg and ffprobe.
     Ffmpeg,
-    /// Installing Python and the model's packages (PyTorch with CUDA is about 3 GB).
-    Packages,
-    /// Downloading the embedding model (about 1.5 GB).
+    /// Downloading ONNX Runtime and DirectML (15 MB).
+    Runtime,
+    /// Downloading the embedding model (about 1.5 GB; 2.9 GB more if full precision is needed).
     Model,
-    /// Loading the model and embedding a test image, clip and sound.
+    /// Loading the model and embedding a test text, picture, sound and video clip.
     SelfTest,
 }
 
@@ -83,13 +82,14 @@ pub struct Gpu {
 pub struct Setup {
     pub state: SetupState,
     pub step: SetupStep,
-    /// One line about what is happening right now, for the user.
+    /// One line about what is happening right now, for the user. Once ready: the device and
+    /// engine the model runs on, e.g. "Model ready on NVIDIA GeForce RTX 4070 (DirectML)".
     pub detail: String,
     /// Download progress of the current step, when it is a download of known size.
     pub bytes_done: Option<u64>,
     pub bytes_total: Option<u64>,
     pub error: Option<String>,
-    /// The NVIDIA GPU found, if any. Without one indexing is refused.
+    /// The graphics card DirectML uses, if any. Without one the model runs on the processor.
     pub gpu: Option<Gpu>,
 }
 

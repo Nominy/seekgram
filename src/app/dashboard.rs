@@ -18,7 +18,7 @@ use super::{
     widgets::{Tone, card, code, column, divider, dot, heading, icon, note, page, problem, row, setting, stat, text},
 };
 
-/// The panel offers automatic, one or two model workers; more rarely fits in VRAM.
+/// The panel offers automatic (one), one or two model workers; more rarely fits in video memory.
 const MAX_WORKERS: u8 = 2;
 /// The service accepts 1 to 16 media messages prepared at once.
 const MAX_CONCURRENCY: u8 = 16;
@@ -56,10 +56,8 @@ impl Panel {
         let setup = &status.setup;
         let busy = self.busy(Control::Repair);
         if setup.state == SetupState::Ready {
-            let line = match &setup.gpu {
-                Some(gpu) if !gpu.name.is_empty() => format!("Model ready on {}", gpu.name),
-                _ => "Model ready".to_owned(),
-            };
+            // The service names the device and engine, e.g. "Model ready on ... (DirectML)".
+            let line = if setup.detail.is_empty() { "Model ready".to_owned() } else { setup.detail.clone() };
             return card()
                 .flex_row()
                 .items_center()
@@ -77,7 +75,7 @@ impl Panel {
                     .gap_3()
                     .justify_between()
                     .child(heading(if failed { "The search model could not be set up" } else { "Getting the search model ready" }))
-                    .child(note(format!("Step {number} of 6")).flex_shrink_0()),
+                    .child(note(format!("Step {number} of 5")).flex_shrink_0()),
             )
             .child(text(if setup.state == SetupState::Pending { "Waiting to check this PC" } else { name }))
             .when(!setup.detail.is_empty(), |card| card.child(note(setup.detail.clone())))
@@ -233,7 +231,7 @@ impl Panel {
             .child(
                 row()
                     .gap_4()
-                    .child(setting("Model workers", "Each worker keeps the model in graphics memory (about 3 GB). Automatic picks from the memory that is free."))
+                    .child(setting("Model workers", "Each worker keeps its own copy of the model in memory, on the graphics card up to about 6 GB. Automatic runs one."))
                     .child(number_stepper(
                         Button::new("workers-less")
                             .disabled(workers == 0)
@@ -296,11 +294,10 @@ impl Panel {
 fn setup_step(step: SetupStep) -> (usize, &'static str) {
     match step {
         SetupStep::Checking => (1, "Checking this PC"),
-        SetupStep::Uv => (2, "Downloading the Python manager"),
-        SetupStep::Ffmpeg => (3, "Downloading the video tools"),
-        SetupStep::Packages => (4, "Installing the model's software (about 3 GB)"),
-        SetupStep::Model => (5, "Downloading the search model (about 1.5 GB)"),
-        SetupStep::SelfTest => (6, "Testing the model on your graphics card"),
+        SetupStep::Ffmpeg => (2, "Downloading the video tools"),
+        SetupStep::Runtime => (3, "Downloading the model runtime (15 MB)"),
+        SetupStep::Model => (4, "Downloading the search model"),
+        SetupStep::SelfTest => (5, "Testing the model on this PC"),
     }
 }
 
@@ -319,7 +316,9 @@ fn download_progress(setup: &Setup) -> Option<Div> {
 fn gpu_line(setup: &Setup) -> Option<Div> {
     match &setup.gpu {
         Some(gpu) => Some(note(format!("Graphics card: {} ({} of memory)", gpu.name, format::bytes(gpu.vram_mb.saturating_mul(1024 * 1024))))),
-        None if setup.state == SetupState::Failed => Some(note("No NVIDIA graphics card was found on this PC.")),
+        None if setup.state != SetupState::Pending && setup.step != SetupStep::Checking => {
+            Some(note("No DirectX 12 graphics card was found, so the model runs on the processor, which is slow."))
+        }
         None => None,
     }
 }

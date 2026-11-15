@@ -6,6 +6,7 @@ mod app;
 mod autostart;
 mod cli;
 mod config;
+mod embed;
 mod paths;
 mod service;
 

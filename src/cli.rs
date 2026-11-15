@@ -106,6 +106,8 @@ pub fn run() -> i32 {
             0
         }
         Some("service") => crate::service::main(),
+        // Started by the service with piped stdin/stdout; it must not touch the console.
+        Some("embed-worker") => crate::embed::main(),
         Some(command) => {
             attach_console();
             match command {

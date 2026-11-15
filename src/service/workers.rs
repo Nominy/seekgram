@@ -1,13 +1,13 @@
-//! The pool of Python model worker processes.
+//! The pool of model worker processes (`seekgram embed-worker`).
 //!
-//! Each worker holds the embedding model in VRAM and answers one JSONL request at a
-//! time on stdin/stdout. Nothing runs until the first request, and everything stops
-//! again after ten quiet minutes, so the graphics card is only occupied while Seekgram
-//! is actually indexing or searching.
+//! Each worker holds the embedding model in memory (video memory on DirectML) and answers
+//! one JSONL request at a time on stdin/stdout. Nothing runs until the first request, and
+//! everything stops again after ten quiet minutes, so the graphics card is only occupied
+//! while Seekgram is actually indexing or searching.
 
 use std::{
     collections::VecDeque,
-    fmt::{self, Write as _},
+    fmt,
     pin::Pin,
     process::Stdio,
     sync::{Arc, Mutex, MutexGuard},
@@ -28,24 +28,20 @@ use super::{
 };
 
 const DIMENSION: usize = 768;
-/// Loading the model from disk into VRAM, measured by a first throwaway request.
+/// Loading the model from disk, measured by a first throwaway request.
 const LOAD_TIMEOUT: Duration = Duration::from_secs(180);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(600);
 const SEND_TIMEOUT: Duration = Duration::from_secs(30);
-/// Workers stop after this long without a request, to give the VRAM back.
+/// Workers stop after this long without a request, to give the memory back.
 const IDLE: Duration = Duration::from_secs(600);
 /// A vector is about 16 KB of JSON; anything far beyond that is not an answer.
 const LINE_LIMIT: u64 = 1024 * 1024;
-/// What one worker needs, and what is left alone for the desktop and other programs.
-const VRAM_PER_WORKER_MB: i64 = 3500;
-const VRAM_RESERVE_MB: i64 = 1024;
 
 const NOT_READY: &str = "The search model is not ready yet. Open Seekgram and look at Setup.";
 const START_FAILED: &str = "The model worker could not be started. Open Seekgram and run Repair in Setup.";
-const LOAD_FAILED: &str = "The search model could not be loaded on the graphics card. Close games and other programs that use a lot of video memory; if it keeps failing, run Repair in Setup.";
+const LOAD_FAILED: &str = "The search model could not be loaded. Close games and other programs that use a lot of video memory; if it keeps failing, run Repair in Setup.";
 const DIED: &str = "The model worker stopped unexpectedly, twice in a row. Seekgram will start it again; if this keeps happening, run Repair in Setup.";
 const STOPPED: &str = "The model worker was stopped.";
-const NO_VRAM_READING: &str = "Seekgram could not ask the NVIDIA driver how much video memory is free. Check that the NVIDIA driver is installed, or choose the number of workers yourself in Settings.";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -246,29 +242,14 @@ impl Pool {
         self.shared.update(|status| status.indexer.workers = loaded);
     }
 
-    /// How many workers to run: the setting, or as many as the free VRAM holds.
+    /// How many workers to run: the setting, or one. Each worker holds its own copy of the
+    /// model, on DirectML up to about 6 GB of video memory on long videos.
     async fn count(&self) -> Result<u32, String> {
         let (ready, configured) = self.shared.read(|status| (status.setup.state == SetupState::Ready, status.settings.workers));
         if !ready {
             return Err(NOT_READY.to_owned());
         }
-        if configured > 0 {
-            return Ok(u32::from(configured));
-        }
-        let mut command = Command::new("nvidia-smi");
-        command
-            .args(["--query-gpu=memory.free", "--format=csv,noheader,nounits"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .kill_on_drop(true);
-        let output = match timeout(Duration::from_secs(20), hidden(&mut command).output()).await {
-            Ok(Ok(output)) if output.status.success() => output.stdout,
-            _ => return Err(NO_VRAM_READING.to_owned()),
-        };
-        // PyTorch's default device is the first GPU, so that is the one that matters.
-        let free_mb = String::from_utf8_lossy(&output).lines().next().and_then(|line| line.trim().parse::<i64>().ok());
-        free_mb.map(workers_for_free_vram).ok_or_else(|| NO_VRAM_READING.to_owned())
+        Ok(u32::from(configured.max(1)))
     }
 
     /// Runs one worker process until it is idle for too long or cannot go on.
@@ -426,15 +407,18 @@ struct Process {
 
 impl Process {
     fn spawn() -> Result<Self, &'static str> {
-        let mut command = Command::new(provision::python());
+        let engine = provision::engine().ok_or(NOT_READY)?;
+        let exe = std::env::current_exe().map_err(|error| {
+            eprintln!("workers: cannot find the Seekgram program file: {error}");
+            START_FAILED
+        })?;
+        let mut command = Command::new(exe);
         command
-            .arg(provision::worker_script())
-            .arg("--ffmpeg")
-            .arg(provision::ffmpeg())
-            .envs(provision::worker_env())
+            .args(engine.arguments())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            // Its diagnostics (load time, device, failures without content) go to the service log.
+            .stderr(Stdio::inherit())
             .kill_on_drop(true);
         let mut child = hidden(&mut command).spawn().map_err(|error| {
             eprintln!("workers: the model worker did not start: {error}");
@@ -479,13 +463,7 @@ impl Process {
     }
 }
 
-fn workers_for_free_vram(free_mb: i64) -> u32 {
-    ((free_mb - VRAM_RESERVE_MB) / VRAM_PER_WORKER_MB).clamp(1, 2) as u32
-}
-
-/// The request as one line of pure-ASCII JSON. The worker reads stdin in the Windows
-/// code page, so a raw non-ASCII character (a search in Russian, a user folder with an
-/// accent) would arrive garbled; `\uXXXX` escapes survive any code page.
+/// The request as one line of JSON.
 fn request_line(id: i64, embed: &Embed) -> String {
     let mut request = json!({"id": id, "kind": embed.kind.as_str(), "input": embed.input});
     if let (Kind::Audio, Some(seconds)) = (embed.kind, embed.seconds) {
@@ -493,17 +471,7 @@ fn request_line(id: i64, embed: &Embed) -> String {
         request["start_seconds"] = json!(0);
         request["end_seconds"] = json!(seconds.min(30.0));
     }
-    let json = request.to_string();
-    let mut line = String::with_capacity(json.len() + 1);
-    for character in json.chars() {
-        if character.is_ascii() {
-            line.push(character);
-        } else {
-            for unit in character.encode_utf16(&mut [0; 2]) {
-                let _ = write!(line, "\\u{unit:04x}");
-            }
-        }
-    }
+    let mut line = request.to_string();
     line.push('\n');
     line
 }
@@ -583,15 +551,6 @@ mod tests {
     }
 
     #[test]
-    fn worker_count_follows_free_vram() {
-        assert_eq!(workers_for_free_vram(0), 1);
-        assert_eq!(workers_for_free_vram(4000), 1);
-        assert_eq!(workers_for_free_vram(8023), 1);
-        assert_eq!(workers_for_free_vram(8024), 2);
-        assert_eq!(workers_for_free_vram(24_000), 2);
-    }
-
-    #[test]
     fn only_audio_requests_carry_bounds() {
         let image: Value = serde_json::from_str(&request_line(1, &embed(Kind::Image, "C:\\tmp\\a", Some(12.0)))).unwrap();
         assert_eq!(image, json!({"id": 1, "kind": "image", "input": "C:\\tmp\\a"}));
@@ -604,13 +563,12 @@ mod tests {
     }
 
     #[test]
-    fn requests_are_ascii_and_round_trip() {
-        let line = request_line(2, &embed(Kind::Text, "розовый дракон \u{1F409}", None));
-        assert!(line.is_ascii());
-        assert!(line.contains("\\u0440") && line.contains("\\ud83d\\udc09"));
+    fn requests_are_one_line_and_round_trip() {
+        let line = request_line(2, &embed(Kind::Text, "розовый дракон \u{1F409}\nвторая строка", None));
         assert_eq!(line.matches('\n').count(), 1);
+        assert!(line.ends_with('\n'));
         let parsed: Value = serde_json::from_str(&line).unwrap();
-        assert_eq!(parsed["input"], json!("розовый дракон \u{1F409}"));
+        assert_eq!(parsed["input"], json!("розовый дракон \u{1F409}\nвторая строка"));
     }
 
     #[test]

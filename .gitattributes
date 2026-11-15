@@ -1,5 +1,6 @@
 *.sh text eol=lf
 *.ps1 text eol=crlf
 
-# Embedded in the binary and hashed: a CRLF checkout would make every install set up again.
-worker/** text eol=lf
+# Embedded in the binary; the graphs are hashed into the setup marker.
+assets/model/** binary
+assets/selftest/** binary

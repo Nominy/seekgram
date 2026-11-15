@@ -23,11 +23,11 @@ pub fn index_dir() -> PathBuf { data_dir().join("index") }
 /// Media fetched to show or to search by; size-capped, safe to delete.
 pub fn cache_dir() -> PathBuf { data_dir().join("cache") }
 pub fn logs_dir() -> PathBuf { data_dir().join("logs") }
-/// Downloaded helper programs: `uv.exe`, `ffmpeg.exe`, `ffprobe.exe`.
+/// Downloaded helper programs: `ffmpeg.exe`, `ffprobe.exe`.
 pub fn tools_dir() -> PathBuf { data_dir().join("tools") }
-/// The model worker: `worker.py`, `pyproject.toml`, `uv.lock` and its `.venv`.
-pub fn worker_dir() -> PathBuf { data_dir().join("worker") }
-/// Hugging Face cache holding the embedding model (about 3 GB).
-pub fn models_dir() -> PathBuf { data_dir().join("models") }
+/// ONNX Runtime: `onnxruntime.dll` and the `DirectML.dll` it must load.
+pub fn runtime_dir() -> PathBuf { data_dir().join("runtime") }
+/// The embedding model: `tokenizer.json`, the graphs and their weights (about 1.5 GB).
+pub fn model_dir() -> PathBuf { data_dir().join("model") }
 /// Scratch space for media being indexed; emptied at service start.
 pub fn temp_dir() -> PathBuf { data_dir().join("tmp") }
