@@ -49,16 +49,24 @@ captions or file names. Nothing is uploaded anywhere.
 
 ## Install
 
-Open **PowerShell** (press <kbd>Win</kbd>, type *PowerShell*, press
-<kbd>Enter</kbd>), paste this line and press <kbd>Enter</kbd>:
+**[Download Seekgram Setup](https://github.com/Nominy/seekgram/releases/latest/download/Seekgram.App-win-Setup.exe)**
+and run it. It installs Seekgram for your Windows user (no admin) with a Start
+menu and desktop shortcut, an entry in *Apps & features* and a start at Windows
+logon, then opens Seekgram.
+
+Seekgram isn't code-signed yet, so the first run needs one extra click: Windows
+SmartScreen says *Windows protected your PC*: click **More info → Run anyway**.
+
+**Or from a terminal:** open **PowerShell** (press <kbd>Win</kbd>, type
+*PowerShell*, press <kbd>Enter</kbd>), paste this line and press <kbd>Enter</kbd>:
 
 ```powershell
 irm https://nominy.github.io/seekgram/install.ps1 | iex
 ```
 
-The script downloads the latest release, verifies its checksum and installs it
-for your Windows user (no admin): Start menu, PATH, *Apps & features*, and a
-start at Windows logon. Then it opens Seekgram.
+The script downloads the same Setup, verifies its checksum and runs it. It also
+removes a copy installed by its earlier versions (in
+`%LOCALAPPDATA%\Programs\Seekgram`), keeping the login, index and model.
 
 The first start downloads the search model and its tools, **about 1.6 GB**, once.
 The window shows the progress, and you can log in to Telegram in the meantime:
@@ -71,8 +79,14 @@ The window shows the progress, and you can log in to Telegram in the meantime:
 
 Indexing starts by itself as soon as the login and the downloads are done.
 
+**Updates install themselves.** Two minutes after it starts, and then every six
+hours, Seekgram asks GitHub for a new release. A new version is downloaded in the
+background, then Seekgram closes its window, stops the service cleanly and
+restarts on the new version. Your login, index and model are untouched. Switch
+this off in *Settings → Install updates automatically*.
+
 <details>
-<summary>Options, updating and manual download</summary>
+<summary>Script options and release files</summary>
 
 Set environment variables before the one-liner, or pass the matching parameters
 when running the script as a file:
@@ -80,27 +94,22 @@ when running the script as a file:
 | Environment variable | Parameter | |
 |--|--|--|
 | `$env:SEEKGRAM_VERSION = 'v0.1.0'` | `-Version v0.1.0` | install a specific release |
-| `$env:SEEKGRAM_NO_AUTOSTART = '1'` | `-NoAutostart` | don't start at Windows logon |
 | `$env:SEEKGRAM_NO_LAUNCH = '1'` | `-NoLaunch` | don't open the app when done |
-| | `-Archive <zip>` | install a release zip you already downloaded |
-| | `-FromSource` | build with cargo instead of downloading |
+| | `-Setup <file>` | run a Setup you already downloaded |
 | | `-Uninstall` | remove Seekgram, keep its data |
 | | `-Uninstall -Purge` | remove Seekgram and delete its data |
 
 To pass parameters without saving the script:
 
 ```powershell
-& ([scriptblock]::Create((irm https://nominy.github.io/seekgram/install.ps1))) -NoAutostart
+& ([scriptblock]::Create((irm https://nominy.github.io/seekgram/install.ps1))) -Uninstall
 ```
 
-**Updating:** run the install line again. It asks the running service to stop
-(waiting up to 30 seconds for it to finish what it is doing), replaces the
-program and starts it again. Your login, index and model are untouched.
-
 Every [release](https://github.com/Nominy/seekgram/releases) has
-`seekgram-windows-x64.zip`, `SHA256SUMS` and `install.ps1`. The zip holds a
-single `seekgram.exe` that runs from anywhere; the installer only adds the
-shortcuts, the PATH entry and the start at logon.
+`Seekgram.App-win-Setup.exe`, `SHA256SUMS`, `install.ps1` and the update
+packages Seekgram downloads itself (`*.nupkg`, `releases.win.json`). The program
+goes to `%LOCALAPPDATA%\Seekgram.App\current`; the data stays separately in
+`%LOCALAPPDATA%\Seekgram`.
 </details>
 
 ## Usage
@@ -133,13 +142,15 @@ do nothing, and `?7` gets you there instead. Things that cannot be part of an
 album (GIFs, video stickers, audio) are forwarded. Only chats that are already
 indexed are searched.
 
-From a terminal:
+From a terminal (the program is
+`%LOCALAPPDATA%\Seekgram.App\current\seekgram.exe`; it is not on PATH):
 
 ```powershell
-seekgram            # open the control panel (starts the service if needed)
-seekgram status     # print what the service is doing, as JSON
-seekgram stop       # stop the background service
-seekgram start      # start it again
+$seekgram = "$env:LOCALAPPDATA\Seekgram.App\current\seekgram.exe"
+& $seekgram            # open the control panel (starts the service if needed)
+& $seekgram status     # print what the service is doing, as JSON
+& $seekgram stop       # stop the background service
+& $seekgram start      # start it again
 ```
 
 ## Requirements
@@ -177,8 +188,9 @@ What it does with that access:
   size-capped cache holds the media a search needs to answer; it is safe to
   delete.
 - **Network traffic** goes to Telegram, and once to GitHub, NuGet and Hugging
-  Face to download ffmpeg, ONNX Runtime with DirectML, and the model. Nothing
-  else.
+  Face to download ffmpeg, ONNX Runtime with DirectML, and the model. Every six
+  hours it asks GitHub's release list for a new version (unless you switch
+  automatic updates off). Nothing else.
 - **It reads every chat, but writes to one.** It scans all your chats for media.
   It sends only search results, and only into your search chat: Saved Messages,
   or a group whose only member is you. That is checked when the group is chosen,
@@ -218,7 +230,7 @@ in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 & ([scriptblock]::Create((irm https://nominy.github.io/seekgram/install.ps1))) -Uninstall
 ```
 
-This removes the program, its shortcut, the PATH entry and the start at logon.
+This stops Seekgram and removes the program, its shortcuts and the start at logon.
 Your Telegram login, the index and the downloaded model stay in
 `%LOCALAPPDATA%\Seekgram`, so a reinstall continues where you left off. To delete
 those too, add `-Purge`:
@@ -255,9 +267,11 @@ cd seekgram
 cargo run --release
 ```
 
-`.\install.ps1 -FromSource` builds your checkout and installs it like a release.
 Set `SEEKGRAM_DATA_DIR` to run a second, isolated instance next to an installed
-one while developing.
+one while developing. A build run from `target\` does not update itself; only a
+copy installed with Seekgram Setup does. To try updates against a local folder of
+`vpk pack` output, set `SEEKGRAM_UPDATE_URL` to that folder before starting the
+service.
 
 <details>
 <summary>Project layout and releasing</summary>
@@ -268,15 +282,18 @@ one while developing.
 | `src/app/` | the control panel ([GPUI](https://gpui.rs)) |
 | `src/embed/` | the model worker (`seekgram embed-worker`): preprocessing and ONNX Runtime |
 | `assets/model/`, `assets/selftest/` | the model graphs and the self-test files, embedded in the binary |
-| `install.ps1` | the install script |
+| `src/install.rs`, `src/service/update.rs` | Setup's install, update and uninstall steps; the automatic updates ([Velopack](https://velopack.io)) |
+| `install.ps1` | the PowerShell install script |
 | `assets/brand/generate.py` | regenerates the logo, header pictures and icons |
 | `site/` | the website at nominy.github.io/seekgram |
 | `docs/ARCHITECTURE.md` | how the parts fit together |
 
 To release: bump `version` in `Cargo.toml`, commit, then
-`git tag vX.Y.Z && git push --tags`. The *Release* workflow builds Windows x64
-and publishes the release with `seekgram-windows-x64.zip`, `SHA256SUMS` and
-`install.ps1`. The *Pages* workflow publishes `site/` and the installer.
+`git tag vX.Y.Z && git push --tags`. The *Release* workflow builds Windows x64,
+packs it with Velopack's `vpk` (with a delta from the previous release) and
+publishes the release with `Seekgram.App-win-Setup.exe`, the update packages,
+`SHA256SUMS` and `install.ps1`. Installed copies pick it up within six hours. The
+*Pages* workflow publishes `site/` and the installer script.
 </details>
 
 ## Acknowledgements

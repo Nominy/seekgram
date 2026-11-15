@@ -4,8 +4,8 @@ Seekgram indexes the photos, videos and audio of a user's Telegram account with 
 local multimodal embedding model and lets them search it: from a Telegram chat of
 their own (`?pink dragon`), and through an MCP endpoint for AI agents. Windows only;
 the model runs on any DirectX 12 GPU through DirectML, or on the CPU. Modelled on
-[Vitreus](https://github.com/Nominy/vitreus): one Rust binary, one-line installer,
-GitHub Pages site.
+[Vitreus](https://github.com/Nominy/vitreus): one Rust binary, a Setup that keeps it
+up to date, a one-line installer, GitHub Pages site.
 
 ## One binary, three roles
 
@@ -18,6 +18,7 @@ GitHub Pages site.
 | `seekgram start` / `stop` / `status` | Start the service detached / ask it to shut down / print status JSON. |
 | `seekgram embed-worker [--engine E] [--self-test]` | A model worker, started by the service (below). |
 | `seekgram --version`, `--help` | |
+| `seekgram --veloapp-install/-updated/-uninstall <version>` | Seekgram Setup's callbacks (`src/install.rs`); they exit at once. |
 
 The service does everything; the panel is only a view. They talk over loopback HTTP.
 
@@ -27,11 +28,45 @@ Everything lives in `%LOCALAPPDATA%\Seekgram` (`SEEKGRAM_DATA_DIR` overrides it,
 second isolated instance during development). See `src/paths.rs`; use those functions,
 never build paths by hand and never write next to the executable.
 
+## Installing and updating
+
+Releases are [Velopack](https://velopack.io) packages, pack id `Seekgram.App`, built by
+`.github/workflows/release.yml` with `vpk` 1.2.161 (the `velopack` crate is the same
+version). `Seekgram.App-win-Setup.exe` installs per user, without admin, to
+`%LOCALAPPDATA%\Seekgram.App`: `Update.exe`, and the program in `current\` (`seekgram.exe`,
+the four Visual C++ runtime DLLs, LICENSE, README). Velopack replaces `current\` on
+every update and deletes the whole folder on uninstall, which is why the pack id is not
+`Seekgram`: that folder name is the data directory.
+
+- `main` first runs `install::handle_setup_events`. After install and after each update
+  it writes the `Run` value `"%LOCALAPPDATA%\Seekgram.App\current\seekgram.exe" service`
+  unless `settings.autostart` is off (skipped entirely when `SEEKGRAM_DATA_DIR` is set, so
+  a test copy cannot take over the real entry). Before uninstall it removes the `Run`
+  value if it points at this executable. It logs to `logs/install.log`. Velopack's
+  uninstaller ends every process in the install folder *before* that hook runs, so the
+  service is not asked to stop there; `install.ps1 -Uninstall` asks it (30 s) first.
+- After an interactive install, Setup starts `seekgram` (the panel, which starts the
+  service) unless `SEEKGRAM_NO_LAUNCH` is set. `Setup.exe --silent` starts nothing.
+- `src/service/update.rs` owns `Status.update`. Two minutes after the service starts and
+  then every six hours since the last successful check (`update.json`), while
+  `settings.check_updates` is on, it reads the release feed of the GitHub releases
+  (pre-releases included), downloads a newer full or delta package into
+  `Seekgram.App\packages`, closes open panels and shuts the service down. As its last act
+  the service starts `Update.exe apply`, which waits for it to exit, swaps `current\` and
+  starts `seekgram.exe service`. The job object that ends the service's children is told
+  to let the updater go. A copy not installed by Setup sets `Status.update.reason` and
+  never checks. `SEEKGRAM_UPDATE_URL` (a folder of `vpk pack` output, or a URL) replaces
+  GitHub, for testing.
+- `install.ps1` downloads the Setup, checks it against `SHA256SUMS` and runs it with
+  `--silent`; it removes an install made by its earlier versions
+  (`%LOCALAPPDATA%\Programs\Seekgram`) first.
+
 ## Modules and owners
 
 | Path | What |
 |--|--|
 | `src/main.rs`, `src/cli.rs` | Mode dispatch, console attach, single-instance. |
+| `src/install.rs` | Seekgram Setup's install, update and uninstall callbacks. |
 | `src/paths.rs`, `src/config.rs` | Paths, `Settings` (JSON), `Secrets` (DPAPI). |
 | `src/service/state.rs` | `Shared`, `Status` and all its sections. **The contract.** |
 | `src/service/mod.rs` | Service lifecycle: lock, log, spawn tasks, shut down. |
@@ -41,6 +76,7 @@ never build paths by hand and never write next to the executable.
 | `src/service/provision.rs` | Gets ffmpeg, ONNX Runtime with DirectML and the model, picks the engine by self-test; owns `Status.setup`. |
 | `src/service/workers.rs` | Pool of model worker processes (`seekgram embed-worker`). |
 | `src/service/indexer.rs` | The indexer; owns `Status.indexer` and `Status.index`. |
+| `src/service/update.rs` | Automatic updates through Velopack; owns `Status.update`. |
 | `src/embed/` | The model worker: JSONL protocol, preprocessing, ONNX Runtime sessions, self-test. |
 | `src/app/` | The GPUI control panel. |
 | `assets/model/` | The six model graphs (fp16 and fp32), embedded and written next to the downloaded weights. |

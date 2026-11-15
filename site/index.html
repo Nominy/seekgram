@@ -36,7 +36,7 @@
     "applicationCategory": "UtilitiesApplication",
     "applicationSubCategory": "Media search",
     "operatingSystem": "Windows 10, Windows 11",
-    "downloadUrl": "https://github.com/Nominy/seekgram/releases/latest",
+    "downloadUrl": "https://github.com/Nominy/seekgram/releases/latest/download/Seekgram.App-win-Setup.exe",
     "license": "https://opensource.org/licenses/MIT",
     "isAccessibleForFree": true,
     "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
@@ -84,6 +84,8 @@
     .copy { all: unset; cursor: pointer; font-size: 13px; color: #9db4c8; padding: 6px 10px; border: 1px solid #ffffff1a; }
     .copy:hover, .copy:focus-visible { color: #eef7ff; border-color: #ffffff40; }
     .hint { color: var(--muted); font-size: 14px; margin-top: 12px; }
+    .get { display: inline-block; background: var(--accent); color: var(--on-accent); font: 600 16px var(--display); text-decoration: none; padding: 14px 28px; margin: 0 0 28px; }
+    .get:hover, .get:focus-visible { background: var(--accent-hover); }
     .hint a, .sub a, .card a, .faq a, .plain a { color: var(--accent); text-decoration: none; }
     .hint a:hover, .sub a:hover, .card a:hover, .faq a:hover, .plain a:hover { text-decoration: underline; }
 
@@ -140,12 +142,14 @@
       <p class="lede">Seekgram finds any photo, video or voice message in your Telegram account from a few words about what is in it. It runs on your own PC, and you search from a Telegram chat on any of your devices.</p>
 
       <div class="install">
-        <p class="or">Install from PowerShell</p>
+        <a class="get" href="https://github.com/Nominy/seekgram/releases/latest/download/Seekgram.App-win-Setup.exe">Download Seekgram Setup</a>
+        <p class="hint">Run the downloaded Setup. It installs without admin rights, starts with Windows and keeps itself up to date (you can switch that off in its Settings). Seekgram is not code-signed yet, so Windows SmartScreen may say <em>Windows protected your PC</em>: click <em>More info</em>, then <em>Run anyway</em>. The first start then downloads the search model and its tools, about 1.6 GB.</p>
+        <p class="or">Or install from PowerShell</p>
         <div class="cmd">
           <code id="cmd-text">irm https://nominy.github.io/seekgram/install.ps1 | iex</code>
           <button class="copy" id="copy" type="button">Copy</button>
         </div>
-        <p class="hint">Press <kbd>Win</kbd>, type <em>PowerShell</em>, press <kbd>Enter</kbd>, paste the line and press <kbd>Enter</kbd> again. It downloads the latest release, checks its checksum and installs without admin rights. The first start then downloads the search model and its tools, about 1.6 GB. <a href="https://github.com/Nominy/seekgram#install">Options &amp; uninstall</a></p>
+        <p class="hint">Press <kbd>Win</kbd>, type <em>PowerShell</em>, press <kbd>Enter</kbd>, paste the line and press <kbd>Enter</kbd> again. It downloads the same Setup, checks its checksum and runs it. <a href="https://github.com/Nominy/seekgram#install">Options &amp; uninstall</a></p>
       </div>
     </header>
 
@@ -201,7 +205,7 @@
       <div class="grid">
         <div class="card"><h3>Everything runs on your PC</h3><p>The model that looks at your media runs on your own graphics card. There is no Seekgram server and no account with us.</p></div>
         <div class="card"><h3>Media is not kept</h3><p>Each photo, video or audio file is downloaded temporarily, turned into a list of numbers (a vector) and deleted. The index stores only those vectors and message IDs. A small, size-capped cache holds what a search needs to answer.</p></div>
-        <div class="card"><h3>Nothing leaves your PC</h3><p>Seekgram talks to Telegram, and once to GitHub, NuGet and Hugging Face to download its model and tools. Nothing about you or your media is sent to anyone else. No telemetry.</p></div>
+        <div class="card"><h3>Nothing leaves your PC</h3><p>Seekgram talks to Telegram, once to GitHub, NuGet and Hugging Face to download its model and tools, and every six hours to GitHub to look for a new version (you can switch that off). Nothing about you or your media is sent to anyone else. No telemetry.</p></div>
         <div class="card"><h3>Your login is protected</h3><p>The Telegram login session and your API key are stored encrypted for your Windows user. Uninstalling with the purge option deletes them along with the index.</p></div>
       </div>
     </section>
@@ -239,7 +243,11 @@
       </details>
       <details>
         <summary>How do I remove it?</summary>
-        <p>Use <em>Settings → Apps → Seekgram → Uninstall</em>. That keeps your Telegram login, index and the downloaded model in <code>%LOCALAPPDATA%\Seekgram</code>, so a reinstall continues where you left off. To delete those as well, run this in PowerShell instead: <code>&amp; ([scriptblock]::Create((irm https://nominy.github.io/seekgram/install.ps1))) -Uninstall -Purge</code></p>
+        <p>Use <em>Settings → Apps → Seekgram → Uninstall</em>. That stops Seekgram and keeps your Telegram login, index and the downloaded model in <code>%LOCALAPPDATA%\Seekgram</code>, so a reinstall continues where you left off. To delete those as well, run this in PowerShell instead: <code>&amp; ([scriptblock]::Create((irm https://nominy.github.io/seekgram/install.ps1))) -Uninstall -Purge</code></p>
+      </details>
+      <details>
+        <summary>How does it stay up to date?</summary>
+        <p>Every six hours Seekgram asks GitHub whether there is a new release. If there is, it downloads it in the background, stops cleanly and restarts on the new version; your login and index are kept. Switch this off in the app under <em>Settings → Install updates automatically</em>.</p>
       </details>
     </section>
 

@@ -1,5 +1,7 @@
-# Push a tag that matches Cargo.toml (e.g. v0.1.0) to build Windows x64 and
-# publish a GitHub release with the zip, its checksum and the installer attached.
+# Push a tag that matches Cargo.toml (e.g. v0.1.0) to build Windows x64, pack it with
+# Velopack (Seekgram Setup, the update packages and their feed) and publish a GitHub
+# release with those, the PowerShell installer and SHA256SUMS. Installed copies find the
+# next release through the feed (src/service/update.rs).
 name: Release
 
 on:
@@ -17,6 +19,10 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   TAG: ${{ inputs.tag || github.ref_name }}
+  # Same release line as the `velopack` crate in Cargo.toml.
+  VPK_VERSION: 1.2.161
+  PACK_ID: Seekgram.App
+  SETUP: Seekgram.App-win-Setup.exe
 
 jobs:
   release:
@@ -43,47 +49,69 @@ jobs:
       - name: Build
         run: cargo build --release --locked
 
-      - name: Package
+      - name: Collect the files to pack
         run: |
-          mkdir -p dist/package
-          cp target/release/seekgram.exe LICENSE README.md dist/package/
+          mkdir -p dist/pack
+          cp target/release/seekgram.exe LICENSE README.md dist/pack/
           # ONNX Runtime needs the Visual C++ runtime. Shipping Microsoft's redistributable DLLs
           # next to seekgram.exe (app-local deployment) means no PC has to have it installed.
           crt="$(ls -d "/c/Program Files/Microsoft Visual Studio"/*/*/VC/Redist/MSVC/14.*/x64/Microsoft.VC14*.CRT | sort -V | tail -1)"
           echo "C++ runtime from $crt"
-          for dll in msvcp140.dll msvcp140_1.dll vcruntime140.dll vcruntime140_1.dll; do cp "$crt/$dll" dist/package/; done
-          (cd dist/package && 7z a -tzip -mx=9 ../seekgram-windows-x64.zip *)
-          rm -r dist/package
-          cp install.ps1 dist/
-          cd dist
-          test -s seekgram-windows-x64.zip
-          sha256sum seekgram-windows-x64.zip install.ps1 > SHA256SUMS
+          for dll in msvcp140.dll msvcp140_1.dll vcruntime140.dll vcruntime140_1.dll; do cp "$crt/$dll" dist/pack/; done
+          ls -l dist/pack
+
+      - name: Install vpk
+        run: dotnet tool install -g vpk --version "$VPK_VERSION"
+
+      # The previous release's full package lets vpk make a delta package, so updates
+      # download only what changed. The first release has none.
+      - name: Download the previous release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          vpk download github --repoUrl "https://github.com/$GITHUB_REPOSITORY" --token "$GH_TOKEN" -o dist/releases \
+            || echo "No previous release to make a delta from."
+
+      - name: Pack
+        run: |
+          vpk pack --packId "$PACK_ID" --packVersion "${TAG#v}" --runtime win-x64 --packDir dist/pack --mainExe seekgram.exe \
+            --packTitle Seekgram --packAuthors Nominy --icon assets/app/seekgram.ico -o dist/releases
+          cp install.ps1 dist/releases/
+          cd dist/releases
+          ls -l
+          test -s "$SETUP"
+          sha256sum "$SETUP" install.ps1 > SHA256SUMS
           cat SHA256SUMS
 
-      # Install what we're about to publish, the way users will: from the zip, per
-      # user, then remove it again. Nothing is launched (no GPU or Telegram here).
+      # Install what we're about to publish, the way users will, then remove it again.
+      # Nothing is launched (no GPU or Telegram here): Setup runs silently, -NoLaunch
+      # (SEEKGRAM_NO_LAUNCH) keeps the script from opening Seekgram, and SEEKGRAM_DATA_DIR
+      # keeps the install hook off the Run key.
       - name: Try the installer
         shell: powershell
         run: |
           $env:SEEKGRAM_DATA_DIR = Join-Path $env:RUNNER_TEMP 'seekgram-data'
-          .\install.ps1 -Archive dist\seekgram-windows-x64.zip -NoAutostart -NoLaunch
-          $dir = Join-Path $env:LOCALAPPDATA 'Programs\Seekgram'
-          if (-not (Test-Path "$dir\seekgram.exe")) { throw 'seekgram.exe was not installed' }
-          if ("v$((Get-Item "$dir\seekgram.exe").VersionInfo.ProductVersion)" -ne $env:TAG.Split('-')[0]) { throw 'version resource does not match the tag' }
-          if ([Environment]::GetEnvironmentVariable('Path', 'User') -notlike "*$dir*") { throw 'not on PATH' }
-          if (-not (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Seekgram' -ErrorAction SilentlyContinue)) { throw 'no uninstall entry' }
-          .\install.ps1 -Uninstall -Purge
-          if (Test-Path $dir) { throw 'uninstall left the program folder behind' }
-          if ([Environment]::GetEnvironmentVariable('Path', 'User') -like "*$dir*") { throw 'still on PATH' }
+          New-Item -ItemType Directory -Force -Path $env:SEEKGRAM_DATA_DIR | Out-Null
+          .\install.ps1 -Setup "dist\releases\$env:SETUP" -NoLaunch
+          $dir = Join-Path $env:LOCALAPPDATA $env:PACK_ID
+          $exe = Join-Path $dir 'current\seekgram.exe'
+          foreach ($file in @($exe, "$dir\Update.exe", "$dir\current\vcruntime140.dll", "$dir\current\msvcp140.dll")) {
+            if (-not (Test-Path $file)) { throw "$file was not installed" }
+          }
+          if ("v$((Get-Item $exe).VersionInfo.ProductVersion)" -ne $env:TAG.Split('-')[0]) { throw 'version resource does not match the tag' }
+          if (-not (Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\$env:PACK_ID" -ErrorAction SilentlyContinue)) { throw 'no uninstall entry' }
+          if (-not (Select-String -Path "$env:SEEKGRAM_DATA_DIR\logs\install.log" -Pattern 'Installed Seekgram' -Quiet)) { throw 'the install hook did not run' }
+          if (Get-Process seekgram -ErrorAction SilentlyContinue) { throw 'Seekgram was started despite SEEKGRAM_NO_LAUNCH' }
+          .\install.ps1 -Uninstall
+          if (Test-Path $exe) { throw 'uninstall left the program behind' }
+          if (-not (Test-Path $env:SEEKGRAM_DATA_DIR)) { throw 'uninstall deleted the data folder' }
 
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/* --clobber
-          else
-            prerelease=""
-            case "$TAG" in *-*) prerelease="--prerelease" ;; esac
-            gh release create "$TAG" dist/* --verify-tag --title "Seekgram $TAG" --generate-notes $prerelease
-          fi
+          pre=""
+          case "$TAG" in *-*) pre="--pre" ;; esac
+          vpk upload github --repoUrl "https://github.com/$GITHUB_REPOSITORY" --token "$GH_TOKEN" -o dist/releases \
+            --tag "$TAG" --releaseName "Seekgram $TAG" --publish --merge $pre
+          gh release upload "$TAG" dist/releases/install.ps1 dist/releases/SHA256SUMS --clobber
