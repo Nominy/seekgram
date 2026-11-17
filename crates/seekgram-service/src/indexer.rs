@@ -16,10 +16,8 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use grammers_client::{
-    ChatMap, Client, InvocationError, grammers_tl_types as tl,
-    types::{Downloadable, Media, Message, PackedChat, Photo, media::Document, photo_sizes::PhotoSize},
-};
+use grammers_client::{Client, InvocationError, media::{Media, Photo, PhotoSize}, tl};
+use grammers_session::types::PeerRef;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use serde_json::{Value, json};
 use tokio::{
@@ -35,7 +33,8 @@ use crate::{config, paths};
 use super::{
     hidden, provision,
     state::{AccountStep, CurrentChat, IndexCounts, IndexerState, SetupState, Shared, unix_now},
-    telegram::marked_id,
+    telegram::{self, document_media, marked_id},
+    download::Source,
     workers::{Embed, EmbedError, Kind, Workers},
 };
 
@@ -744,6 +743,12 @@ fn telegram_fault(error: &InvocationError) -> Fault {
             Some(seconds) if matches!(rpc.name.as_str(), "FLOOD_WAIT" | "FLOOD_PREMIUM_WAIT") => Fault::Flood(u64::from(seconds)),
             _ => Fault::Code(format!("telegram:{}", rpc.name.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_').collect::<String>())),
         },
+        // Nothing can be read until Seekgram is updated; recording that against each
+        // message would use up its attempts.
+        InvocationError::Deserialize(error) => {
+            eprintln!("indexer: a Telegram reply could not be decoded: {error}");
+            Halt::Failed(telegram::UNREADABLE.to_owned()).into()
+        }
         _ => code("telegram:connection"),
     }
 }
@@ -753,6 +758,10 @@ fn telegram_fault(error: &InvocationError) -> Fault {
 fn telegram_failure(fault: Fault) -> Halt {
     match fault {
         Fault::Halt(halt) => halt,
+        Fault::Code(code) if code.starts_with("telegram:") && code != "telegram:connection" => {
+            eprintln!("indexer: Telegram refused a request ({code})");
+            Halt::Failed(format!("Telegram refused a request ({}). Indexing will try again in a minute.", &code["telegram:".len()..]))
+        }
         fault => {
             eprintln!("indexer: a Telegram request failed: {fault:?}");
             Halt::Failed(TELEGRAM_SILENT.to_owned())
@@ -768,7 +777,7 @@ struct Target {
     /// Size of the document, when the message has one.
     size: Option<i64>,
     /// `None` when Telegram only has a placeholder for the file.
-    download: Option<Downloadable>,
+    download: Option<Source>,
 }
 
 /// The photo and the document a message exposes, by Telethon's rules: its own media,
@@ -821,9 +830,13 @@ fn signature(kind: Kind, id: i64, size: Option<i64>) -> String {
     }
 }
 
-fn classify(message: &Message) -> Option<Target> {
-    use tl::enums::DocumentAttribute as Attribute;
-    let (photo, document) = attachments(message.raw.media.as_ref(), message.raw_action.as_ref());
+fn classify(message: &tl::enums::Message) -> Option<Target> {
+    use tl::enums::{DocumentAttribute as Attribute, Message as M};
+    let (photo, document) = match message {
+        M::Message(message) => attachments(message.media.as_ref(), None),
+        M::Service(service) => attachments(None, Some(&service.action)),
+        M::Empty(_) => return None,
+    };
     let kind = match (photo, document) {
         (Some(_), _) => Kind::Image,
         (None, Some(document)) => media_kind(
@@ -846,28 +859,20 @@ fn classify(message: &Message) -> Option<Target> {
 
 /// The last size Telegram lists for the photo, which is the one Telethon downloads;
 /// picking the same file keeps new vectors equal to the prototype's for the same photo.
-fn photo_download(photo: &tl::enums::Photo) -> Option<Downloadable> {
+fn photo_download(photo: &tl::enums::Photo) -> Option<Source> {
     let last = Photo::from_raw(photo.clone()).thumbs().pop()?;
-    matches!(last, PhotoSize::Size(_) | PhotoSize::Progressive(_) | PhotoSize::Cached(_)).then(|| Downloadable::PhotoSize(last))
+    matches!(last, PhotoSize::Size(_) | PhotoSize::Progressive(_) | PhotoSize::Cached(_)).then(|| Source::PhotoSize(last))
 }
 
-fn document_download(document: &tl::types::Document) -> Downloadable {
-    Downloadable::Media(Media::Document(Document::from_raw_media(tl::types::MessageMediaDocument {
-        nopremium: false,
-        spoiler: false,
-        video: false,
-        round: false,
-        voice: false,
-        document: Some(tl::enums::Document::Document(document.clone())),
-        alt_document: None,
-        ttl_seconds: None,
-    })))
+fn document_download(document: &tl::types::Document) -> Source {
+    Source::Media(Media::Document(document_media(tl::enums::Document::Document(document.clone()))))
 }
 
 /// Media that Telegram deletes on a timer: view-once photos and videos, and anything
 /// in a chat with auto-delete. Its vectors would outlive it, so it is never indexed.
-fn self_destructing(message: &tl::types::Message) -> bool {
+fn self_destructing(message: &tl::enums::Message) -> bool {
     use tl::enums::MessageMedia as M;
+    let tl::enums::Message::Message(message) = message else { return false };
     match &message.media {
         None | Some(M::Empty) => false,
         Some(M::Photo(media)) => media.ttl_seconds.is_some() || message.ttl_period.is_some(),
@@ -1133,28 +1138,33 @@ impl History {
     }
 
     /// Takes one response and returns its messages, oldest first.
-    fn accept(&mut self, client: &Client, response: tl::enums::messages::Messages) -> Vec<Message> {
-        use tl::enums::messages::Messages;
+    fn accept(&mut self, response: tl::enums::messages::Messages) -> Vec<tl::enums::Message> {
+        use tl::enums::{Message as M, messages::Messages};
         // A plain `Messages` is the whole remaining history rather than a slice of it.
-        let (messages, users, chats, whole) = match response {
-            Messages::Messages(page) => (page.messages, page.users, page.chats, true),
-            Messages::Slice(page) => (page.messages, page.users, page.chats, false),
-            Messages::ChannelMessages(page) => (page.messages, page.users, page.chats, false),
-            Messages::NotModified(_) => (Vec::new(), Vec::new(), Vec::new(), true),
+        let (messages, whole) = match response {
+            Messages::Messages(page) => (page.messages, true),
+            Messages::Slice(page) => (page.messages, false),
+            Messages::ChannelMessages(page) => (page.messages, false),
+            Messages::NotModified(_) => (Vec::new(), true),
         };
-        let chats = ChatMap::new(users, chats);
         let mut page = Vec::with_capacity(messages.len());
-        for raw in messages.into_iter().rev() {
-            let Some(message) = Message::from_raw(client, raw, &chats) else { continue };
+        let mut newest_date = None;
+        for message in messages.into_iter().rev() {
+            let date = match &message {
+                M::Message(message) => message.date,
+                M::Service(message) => message.date,
+                M::Empty(_) => continue,
+            };
             if message.id() > self.last {
                 self.last = message.id();
+                newest_date = Some(date);
                 page.push(message);
             }
         }
-        match page.last() {
-            Some(newest) if !whole => {
-                self.request.offset_id = newest.id() + 1;
-                self.request.offset_date = newest.raw.date;
+        match newest_date {
+            Some(date) if !whole => {
+                self.request.offset_id = self.last + 1;
+                self.request.offset_date = date;
             }
             // Telegram returns at least one message while there is more to fetch.
             _ => self.finished = true,
@@ -1168,7 +1178,7 @@ struct ChatRef {
     /// Marked ID, as stored in the index.
     id: i64,
     title: String,
-    peer: PackedChat,
+    peer: PeerRef,
     /// ID of the chat's newest message when the chats were listed.
     top: i32,
 }
@@ -1206,7 +1216,7 @@ impl Session {
         let account_id = loop {
             let outcome = guard(shared, timeout(NETWORK_TIMEOUT, client.get_me())).await?;
             if let Some(me) = flood.absorb(outcome).await.map_err(telegram_failure)? {
-                break me.id();
+                break marked_id(me.id());
             }
         };
         let db = guard(shared, Db::open(account_id)).await??;
@@ -1280,9 +1290,15 @@ impl Session {
                 Some(None) => return Ok(chats),
                 None => continue,
             };
-            let id = marked_id(dialog.chat());
+            let id = marked_id(dialog.peer_id());
             if self.shared.settings().search_chat != Some(id) && seen.insert(id) {
-                chats.push(ChatRef { id, title: dialog.chat().name().to_owned(), peer: dialog.chat().pack(), top: dialog.raw.top_message() });
+                // A community states no newest message; 0 means "unknown, read it".
+                let top = match &dialog.raw {
+                    tl::enums::Dialog::Dialog(dialog) => dialog.top_message,
+                    tl::enums::Dialog::Folder(folder) => folder.top_message,
+                    tl::enums::Dialog::Community(_) => 0,
+                };
+                chats.push(ChatRef { id, title: dialog.peer().name().unwrap_or_default().to_owned(), peer: dialog.peer_ref(), top });
             }
         }
     }
@@ -1315,7 +1331,7 @@ impl Session {
             let fetched = loop {
                 let outcome = self.guard(timeout(NETWORK_TIMEOUT, self.client.get_messages_by_id(chat.peer, &[id]))).await?;
                 match self.flood.absorb(outcome).await {
-                    Ok(Some(found)) => break Ok(found.into_iter().next().flatten()),
+                    Ok(Some(found)) => break Ok(found.into_iter().next().flatten().map(|message| message.raw)),
                     Ok(None) => {}
                     Err(Fault::Code(code)) => break Err(code),
                     Err(fault) => return Err(fault),
@@ -1326,7 +1342,7 @@ impl Session {
                 Ok(None) => Err("message unavailable".to_owned()),
                 Ok(Some(message)) => match classify(&message) {
                     None => Err("previously failed media unavailable".to_owned()),
-                    Some(_) if self_destructing(&message.raw) => Err(SELF_DESTRUCTING.to_owned()),
+                    Some(_) if self_destructing(&message) => Err(SELF_DESTRUCTING.to_owned()),
                     Some(target) => Ok(target),
                 },
             };
@@ -1342,7 +1358,7 @@ impl Session {
     /// Indexes the chat's messages above its checkpoint, oldest first, several media
     /// messages at a time. Their tasks are left in `tasks` for the caller to end.
     async fn scan(self: &Arc<Self>, chat: &ChatRef, after: i32, tasks: &mut JoinSet<(i32, Result<(), Halt>)>) -> Result<(), Fault> {
-        let mut history = History::new(chat.peer.to_input_peer(), after);
+        let mut history = History::new((&chat.peer).into(), after);
         let mut fetched = VecDeque::new();
         let mut window = Window::default();
         loop {
@@ -1372,19 +1388,19 @@ impl Session {
         }
     }
 
-    async fn page(&self, history: &mut History) -> Result<Vec<Message>, Fault> {
+    async fn page(&self, history: &mut History) -> Result<Vec<tl::enums::Message>, Fault> {
         loop {
             let outcome = self.guard(timeout(NETWORK_TIMEOUT, self.client.invoke(&history.request))).await?;
             if let Some(response) = self.flood.absorb(outcome).await? {
-                return Ok(history.accept(&self.client, response));
+                return Ok(history.accept(response));
             }
         }
     }
 
     /// Puts a message in the window, starting a task for it when it carries media.
-    fn admit(self: &Arc<Self>, chat_id: i64, message: Message, window: &mut Window, tasks: &mut JoinSet<(i32, Result<(), Halt>)>) {
+    fn admit(self: &Arc<Self>, chat_id: i64, message: tl::enums::Message, window: &mut Window, tasks: &mut JoinSet<(i32, Result<(), Halt>)>) {
         let id = message.id();
-        if self_destructing(&message.raw) {
+        if self_destructing(&message) {
             return window.push(id, Slot::Settled(Some(SELF_DESTRUCTING)));
         }
         let Some(target) = classify(&message) else { return window.push(id, Slot::Settled(None)) };

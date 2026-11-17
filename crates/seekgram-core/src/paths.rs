@@ -15,7 +15,9 @@ pub fn settings_file() -> PathBuf { data_dir().join("settings.json") }
 /// Telegram API key and the local access token, encrypted for the Windows user.
 pub fn secrets_file() -> PathBuf { data_dir().join("secrets.bin") }
 /// The Telegram login. Whoever holds this file is logged in as the user.
-pub fn session_file() -> PathBuf { data_dir().join("telegram.session") }
+pub fn session_db() -> PathBuf { data_dir().join("telegram.sqlite3") }
+/// The login as grammers 0.7 saved it, read once to fill a new `session_db`.
+pub fn legacy_session_file() -> PathBuf { data_dir().join("telegram.session") }
 /// Held by the running service; a second service refuses to start.
 pub fn lock_file() -> PathBuf { data_dir().join("service.lock") }
 /// The embedding index: `index.sqlite3`.

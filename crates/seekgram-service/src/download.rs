@@ -1,10 +1,12 @@
 //! Shared Telegram file transport: pipelined parts, sticky DC routing and bounded memory.
 
-use std::{collections::HashSet, fmt, future::Future, io::{self, SeekFrom}, sync::atomic::{AtomicI32, AtomicU64, Ordering}, time::{Duration, Instant}};
+use std::{collections::HashSet, fmt, future::Future, io::{self, SeekFrom}, sync::{Arc, atomic::{AtomicI32, AtomicU64, Ordering}}, time::{Duration, Instant}};
 
 use futures_util::{stream::FuturesUnordered, StreamExt};
-use grammers_client::{Client, InvocationError, grammers_tl_types as tl, types::{Downloadable, Media, photo_sizes::PhotoSize}};
+use grammers_client::{Client, InvocationError, media::{Downloadable, Media, PhotoSize}, tl};
 use tokio::{io::{AsyncSeek, AsyncSeekExt, AsyncWrite, AsyncWriteExt}, sync::{Mutex, Semaphore}, time::timeout};
+
+use super::session_store::SessionStore;
 
 const PART: u64 = 512 * 1024;
 const PIPELINE: usize = 4;
@@ -42,24 +44,58 @@ impl From<io::Error> for Error {
     fn from(error: io::Error) -> Self { Self::Io(error) }
 }
 
+/// What a download fetches: one size of a photo, or a message's media.
+pub(crate) enum Source {
+    PhotoSize(PhotoSize),
+    Media(Media),
+}
+
+impl Source {
+    /// The byte count Telegram states for the file, when it states one.
+    fn size(&self) -> Option<u64> {
+        match self {
+            Self::PhotoSize(photo) => Some(photo.size() as u64),
+            Self::Media(Media::Document(document)) => Some(document.size().unwrap_or(0) as u64),
+            Self::Media(Media::Sticker(sticker)) => Some(sticker.document.size().unwrap_or(0) as u64),
+            Self::Media(_) => None,
+        }
+    }
+
+    fn location(&self) -> Option<tl::enums::InputFileLocation> {
+        match self {
+            Self::PhotoSize(photo) => photo.to_raw_input_location(),
+            Self::Media(media) => media.to_raw_input_location(),
+        }
+    }
+
+    /// The DC in the media's metadata. A photo size carries none.
+    fn dc(&self) -> Option<i32> {
+        match self {
+            Self::PhotoSize(_) => None,
+            Self::Media(media) => media.dc_id(),
+        }
+    }
+}
+
 pub(crate) struct Downloader {
     client: Client,
+    session: Arc<SessionStore>,
     // Shared by indexing and interactive exports, not multiplied by file concurrency.
     requests: Semaphore,
-    // grammers 0.7 races cold invoke_in_dc calls into duplicate auth exports. Serialize
-    // only the first successful call to a DC; subsequent calls share its connection.
-    connected: Mutex<HashSet<i32>>,
+    // DCs other than home this login was copied to. Serialized so concurrent first
+    // requests to a cold DC export the login once.
+    authorized: Mutex<HashSet<i32>>,
     cooldown: Mutex<Instant>,
 }
 
 impl Downloader {
-    pub(crate) fn new(client: Client) -> Self {
-        Self { client, requests: Semaphore::new(8), connected: Mutex::new(HashSet::new()), cooldown: Mutex::new(Instant::now()) }
+    pub(crate) fn new(client: Client, session: Arc<SessionStore>) -> Self {
+        Self { client, session, requests: Semaphore::new(8), authorized: Mutex::new(HashSet::new()), cooldown: Mutex::new(Instant::now()) }
     }
 
     pub(crate) async fn save<F, Fut>(
         &self,
-        media: &Downloadable,
+        media: &Source,
         file: &mut tokio::fs::File,
         max_bytes: u64,
         mut progress: impl FnMut(u64),
@@ -69,7 +105,7 @@ impl Downloader {
         F: Fn(u64) -> Fut + Sync,
         Fut: Future<Output = ()> + Send,
     {
-        if let Downloadable::PhotoSize(PhotoSize::Cached(photo)) = media {
+        if let Source::PhotoSize(PhotoSize::Cached(photo)) = media {
             if photo.bytes.is_empty() { return Err(Error::Empty); }
             if photo.bytes.len() as u64 > max_bytes { return Err(Error::TooLarge); }
             file.write_all(&photo.bytes).await?;
@@ -77,18 +113,13 @@ impl Downloader {
             progress(photo.bytes.len() as u64);
             return Ok(photo.bytes.len() as u64);
         }
-        let size = match media {
-            Downloadable::Media(Media::Document(document)) => Some(document.size()),
-            Downloadable::Media(Media::Sticker(sticker)) => Some(sticker.document.size()),
-            Downloadable::PhotoSize(photo) => Some(photo.size() as i64),
-            _ => None,
-        };
-        if size.is_some_and(|size| size <= 0) { return Err(Error::Empty); }
-        let location = media.to_raw_input_location().ok_or(Error::Empty)?;
+        let size = media.size();
+        if size == Some(0) { return Err(Error::Empty); }
+        let location = media.location().ok_or(Error::Empty)?;
         // File traffic belongs on the DC carried by the media, not necessarily the
         // account's home DC. PhotoSize omits that metadata, so it needs discovery.
-        let home_dc = self.client.session().get_user().map(|user| user.dc);
-        let source_dc = media_dc(media);
+        let home_dc = self.session.home_dc().ok();
+        let source_dc = media.dc();
         let dc = AtomicI32::new(route_dc(home_dc, source_dc)?);
         let id = NEXT_DOWNLOAD.fetch_add(1, Ordering::Relaxed);
         let started = Instant::now();
@@ -112,7 +143,7 @@ impl Downloader {
                 ).await
             }
         };
-        let result = transfer(file, size.map(|size| size as u64), max_bytes, fetch, |bytes| {
+        let result = transfer(file, size, max_bytes, fetch, |bytes| {
             received += bytes;
             progress(bytes);
             if published.elapsed() >= Duration::from_secs(1) {
@@ -132,6 +163,17 @@ impl Downloader {
         }
     }
 
+    /// Copies the login to `dc`, once: a DC other than home does not know it otherwise.
+    async fn authorize(&self, dc: i32) -> Result<(), InvocationError> {
+        let mut authorized = self.authorized.lock().await;
+        if authorized.contains(&dc) { return Ok(()); }
+        let tl::enums::auth::ExportedAuthorization::Authorization(exported) =
+            self.client.invoke(&tl::functions::auth::ExportAuthorization { dc_id: dc }).await?;
+        self.client.invoke_in_dc(dc, &tl::functions::auth::ImportAuthorization { id: exported.id, bytes: exported.bytes }).await?;
+        authorized.insert(dc);
+        Ok(())
+    }
+
     async fn part(&self, location: &tl::enums::InputFileLocation, dc: &AtomicI32, offset: u64) -> Result<Vec<u8>, Error> {
         let _permit = self.requests.acquire().await.expect("download semaphore is never closed");
         self.ready().await;
@@ -147,47 +189,24 @@ impl Downloader {
                 let result = if route == 0 {
                     self.client.invoke(&request).await
                 } else {
-                    let mut connected = self.connected.lock().await;
-                    if connected.contains(&route) {
-                        drop(connected);
-                        self.client.invoke_in_dc(&request, route).await
-                    } else {
-                        let result = self.client.invoke_in_dc(&request, route).await;
-                        if result.is_ok() { connected.insert(route); }
-                        result
-                    }
+                    self.client.invoke_in_dc(route, &request).await
                 };
                 match result {
                     Ok(tl::enums::upload::File::File(file)) => return Ok(file.bytes),
                     Ok(tl::enums::upload::File::CdnRedirect(_)) => return Err(Error::Protocol("Unexpected Telegram CDN redirect (CDN was not requested)")),
                     Err(InvocationError::Rpc(error)) if error.code == 303 && error.name == "FILE_MIGRATE" => {
                         let Some(next @ 1..=5) = error.value else { return Err(Error::Protocol("Invalid Telegram file datacenter")); };
-                        let next = route_dc(self.client.session().get_user().map(|user| user.dc), Some(next as i32))?;
+                        let next = route_dc(self.session.home_dc().ok(), Some(next as i32))?;
                         let _ = dc.compare_exchange(route, next, Ordering::Relaxed, Ordering::Relaxed);
+                    }
+                    Err(InvocationError::Rpc(error)) if route != 0 && error.name == "AUTH_KEY_UNREGISTERED" => {
+                        self.authorize(route).await.map_err(Error::Telegram)?;
                     }
                     Err(error) => return Err(Error::Telegram(error)),
                 }
             }
             Err(Error::Protocol("Telegram file datacenter migration loop"))
         }).await.map_err(|_| Error::Timeout)?
-    }
-}
-
-fn media_dc(media: &Downloadable) -> Option<i32> {
-    let document = match media {
-        Downloadable::Media(Media::Document(document)) => Some(document),
-        Downloadable::Media(Media::Sticker(sticker)) => Some(&sticker.document),
-        Downloadable::Media(Media::Photo(photo)) => return match &photo.raw.photo {
-            Some(tl::enums::Photo::Photo(photo)) => Some(photo.dc_id),
-            _ => None,
-        },
-        Downloadable::UserProfilePhoto(photo) => return Some(photo.raw.dc_id),
-        Downloadable::ChatPhoto(photo) => return Some(photo.raw.dc_id),
-        _ => None,
-    }?;
-    match &document.raw.document {
-        Some(tl::enums::Document::Document(document)) => Some(document.dc_id),
-        _ => None,
     }
 }
 

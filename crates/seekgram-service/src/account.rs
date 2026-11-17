@@ -1,20 +1,20 @@
 //! The Telegram login: from "no API key" to a ready client, one user-supplied step at
 //! a time. Owns `Status.account` and the lifetime of the logged-in client.
 
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
-use grammers_client::{grammers_tl_types as tl, types::{LoginToken, PasswordToken, User}, Client, InvocationError, SignInError};
+use grammers_client::{InvocationError, SignInError, client::{LoginToken, PasswordToken}, peer::User, tl};
 use tokio::{sync::mpsc, task::JoinHandle};
 
 use crate::paths;
 
-use super::{chat_search, state::{AccountStep, LoginCommand, LoginRequest, Shared}, telegram::{self, TelegramService}, workers::Workers};
+use super::{chat_search, state::{AccountStep, LoginCommand, LoginRequest, Shared}, telegram::{self, Connection, TelegramService, marked_id}, workers::Workers};
 
 struct Account {
     shared: Arc<Shared>,
     workers: Arc<Workers>,
     /// Connected, though not necessarily logged in yet.
-    client: Option<Client>,
+    connection: Option<Connection>,
     code: Option<LoginToken>,
     password: Option<PasswordToken>,
     /// The chat search listener of the logged-in client.
@@ -23,8 +23,11 @@ struct Account {
 
 /// Turns a Telegram error into a sentence the user can act on.
 fn explain(error: &InvocationError) -> String {
-    let InvocationError::Rpc(rpc) = error else {
-        return "Could not reach Telegram. Check your internet connection and try again.".to_owned();
+    let rpc = match error {
+        InvocationError::Rpc(rpc) => rpc,
+        InvocationError::Deserialize(_) => return telegram::UNREADABLE.to_owned(),
+        InvocationError::Session(error) => return format!("The saved Telegram login cannot be used: {error}"),
+        _ => return "Could not reach Telegram. Check your internet connection and try again.".to_owned(),
     };
     match rpc.name.as_str() {
         "API_ID_INVALID" | "API_ID_PUBLISHED_FLOOD" => "Telegram does not accept this API key. Check the api_id and api_hash on my.telegram.org.".to_owned(),
@@ -57,29 +60,39 @@ impl Account {
         Some((secrets.api_id?, secrets.api_hash.clone()?))
     }
 
+    fn client(&self) -> Option<grammers_client::Client> {
+        self.connection.as_ref().map(|connection| connection.client.clone())
+    }
+
+    /// Drops the client and its connections to Telegram.
+    async fn disconnect(&mut self) {
+        if let Some(connection) = self.connection.take() { connection.close().await; }
+    }
+
     /// Connects with the stored key and moves to whichever step applies. Returns whether
     /// Telegram was reached; an unreachable Telegram is retried by the caller.
     async fn connect(&mut self) -> bool {
-        let Some((api_id, api_hash)) = self.key() else {
+        let Some((api_id, _)) = self.key() else {
             self.step(AccountStep::ApiKey, None);
             return true;
         };
         self.step(AccountStep::Connecting, None);
-        let client = match telegram::connect(api_id, &api_hash).await {
-            Ok(client) => client,
+        self.disconnect().await;
+        let connection = match telegram::connect(api_id) {
+            Ok(connection) => connection,
             Err(error) => {
                 self.step(AccountStep::Connecting, Some(error));
                 return false;
             }
         };
-        match client.is_authorized().await {
+        let authorized = connection.client.is_authorized().await;
+        self.connection = Some(connection);
+        match authorized {
             Ok(true) => {
-                self.client = Some(client);
                 self.ready().await;
                 true
             }
             Ok(false) => {
-                self.client = Some(client);
                 self.step(AccountStep::Phone, None);
                 true
             }
@@ -91,30 +104,31 @@ impl Account {
         }
     }
 
-    /// The client is logged in: save the login, publish it and start answering searches.
+    /// The client is logged in: publish it and start answering searches. The session
+    /// store has saved the login as it changed.
     async fn ready(&mut self) {
-        let Some(client) = self.client.clone() else { return };
+        let Some(connection) = &self.connection else { return };
+        let (client, session) = (connection.client.clone(), connection.session.clone());
         let me: User = match client.get_me().await {
             Ok(me) => me,
             Err(error) => return self.step(AccountStep::Connecting, Some(explain(&error))),
         };
-        if let Err(error) = client.session().save_to_file(paths::session_file()) {
-            // Without the saved login the next start would ask for a code again; say so now.
-            return self.step(AccountStep::Phone, Some(format!("Logged in, but the login could not be saved to disk: {error}")));
-        }
-        let service = match TelegramService::new(client) {
+        let service = match TelegramService::new(client, session) {
             Ok(service) => Arc::new(service),
             Err(error) => return self.step(AccountStep::Connecting, Some(format!("The drafts database could not be opened: {error}"))),
+        };
+        let Some(updates) = self.connection.as_mut().and_then(|connection| connection.updates.take()) else {
+            return self.step(AccountStep::Connecting, Some("Telegram's updates are already being listened to; restart Seekgram.".to_owned()));
         };
         *self.shared.telegram.write().await = Some(service.clone());
         self.shared.update(|status| {
             status.account.name = Some(me.full_name());
-            status.account.id = Some(me.id());
+            status.account.id = Some(marked_id(me.id()));
         });
         self.shared.update(|status| { status.account.step = AccountStep::Ready; status.account.error = None; status.account.password_hint = None; });
         self.shared.notify();
         eprintln!("Account: logged in");
-        self.listener = Some(tokio::spawn(chat_search::run(self.shared.clone(), service, self.workers.clone(), me)));
+        self.listener = Some(tokio::spawn(chat_search::run(self.shared.clone(), service, self.workers.clone(), me, updates)));
     }
 
     async fn forget(&mut self) {
@@ -128,7 +142,7 @@ impl Account {
         match command {
             LoginCommand::ApiKey { api_id, api_hash } => {
                 self.forget().await;
-                self.client = None;
+                self.disconnect().await;
                 let saved = {
                     let mut secrets = self.shared.secrets.lock().unwrap_or_else(|e| e.into_inner());
                     secrets.api_id = Some(api_id);
@@ -141,19 +155,18 @@ impl Account {
                 }
             }
             LoginCommand::Phone(phone) => {
-                let Some(client) = self.client.clone() else { self.connect().await; return };
+                let (Some(client), Some((_, api_hash))) = (self.client(), self.key()) else { self.connect().await; return };
                 if self.shared.read(|status| status.account.step) == AccountStep::Ready { return; }
-                match client.request_login_code(&phone).await {
+                match client.request_login_code(&phone, &api_hash).await {
                     Ok(token) => { self.code = Some(token); self.step(AccountStep::Code, None); }
-                    Err(grammers_mtsender::AuthorizationError::Invoke(error)) => {
+                    Err(error) => {
                         let invalid_key = matches!(&error, InvocationError::Rpc(rpc) if rpc.name.starts_with("API_ID"));
                         self.step(if invalid_key { AccountStep::ApiKey } else { AccountStep::Phone }, Some(explain(&error)));
                     }
-                    Err(_) => self.step(AccountStep::Phone, Some("Could not set up a secure connection to Telegram. Try again.".to_owned())),
                 }
             }
             LoginCommand::Code(code) => {
-                let (Some(client), Some(token)) = (self.client.clone(), self.code.as_ref()) else {
+                let (Some(client), Some(token)) = (self.client(), self.code.as_ref()) else {
                     return self.step(AccountStep::Phone, Some("Enter your phone number first.".to_owned()));
                 };
                 match client.sign_in(token, &code).await {
@@ -165,16 +178,16 @@ impl Account {
                         self.shared.update(|status| status.account.password_hint = hint);
                     }
                     Err(SignInError::InvalidCode) => self.step(AccountStep::Code, Some("That code is not right. Check the newest message from Telegram.".to_owned())),
-                    Err(SignInError::SignUpRequired { .. }) => self.step(AccountStep::Phone, Some("There is no Telegram account for this number. Create one in the Telegram app first.".to_owned())),
+                    Err(SignInError::SignUpRequired) => self.step(AccountStep::Phone, Some("There is no Telegram account for this number. Create one in the Telegram app first.".to_owned())),
                     Err(SignInError::Other(error)) => {
                         let expired = matches!(&error, InvocationError::Rpc(rpc) if rpc.name == "PHONE_CODE_EXPIRED");
                         self.step(if expired { AccountStep::Phone } else { AccountStep::Code }, Some(explain(&error)));
                     }
-                    Err(SignInError::InvalidPassword) => self.step(AccountStep::Code, Some("Telegram refused the code.".to_owned())),
+                    Err(SignInError::InvalidPassword(_)) => self.step(AccountStep::Code, Some("Telegram refused the code.".to_owned())),
                 }
             }
             LoginCommand::Password(password) => {
-                let Some(client) = self.client.clone() else { self.connect().await; return };
+                let Some(client) = self.client() else { self.connect().await; return };
                 // A token is used up by one attempt, so a retry asks Telegram for a fresh one.
                 let token = match self.password.take() {
                     Some(token) => token,
@@ -186,7 +199,7 @@ impl Account {
                 let hint = token.hint().map(str::to_owned);
                 match client.check_password(token, password.as_bytes()).await {
                     Ok(_) => self.ready().await,
-                    Err(SignInError::InvalidPassword) => {
+                    Err(SignInError::InvalidPassword(_)) => {
                         self.step(AccountStep::Password, Some("That password is not right.".to_owned()));
                         self.shared.update(|status| status.account.password_hint = hint);
                     }
@@ -199,12 +212,19 @@ impl Account {
             }
             LoginCommand::Logout => {
                 self.forget().await;
-                if let Some(client) = self.client.take() {
+                if let Some(client) = self.client() {
                     // Ends the session on Telegram's side too, so it disappears from "Devices".
                     if let Err(error) = client.sign_out().await { eprintln!("Account: Telegram did not confirm the logout: {error}"); }
                 }
-                if let Err(error) = std::fs::remove_file(paths::session_file()) {
-                    if error.kind() != std::io::ErrorKind::NotFound { eprintln!("Account: the saved login could not be deleted: {error}"); }
+                // The session database is open until its connection is gone.
+                self.disconnect().await;
+                let session = paths::session_db();
+                let mut files = vec![paths::legacy_session_file(), session.clone()];
+                files.extend(["-wal", "-shm"].map(|suffix| { let mut name = session.clone().into_os_string(); name.push(suffix); name.into() }));
+                for file in files {
+                    if let Err(error) = std::fs::remove_file(&file) {
+                        if error.kind() != std::io::ErrorKind::NotFound { eprintln!("Account: the saved login could not be deleted: {error}"); }
+                    }
                 }
                 self.connect().await;
             }
@@ -214,10 +234,8 @@ impl Account {
 
 /// Runs until shutdown, serving login steps from the control API.
 pub async fn run(shared: Arc<Shared>, workers: Arc<Workers>, mut commands: mpsc::Receiver<LoginRequest>) {
-    let mut account = Account { shared: shared.clone(), workers, client: None, code: None, password: None, listener: None };
+    let mut account = Account { shared: shared.clone(), workers, connection: None, code: None, password: None, listener: None };
     let mut reachable = account.connect().await;
-    // The login state changes as Telegram moves the account between servers; keep the file current.
-    let mut save = tokio::time::interval(Duration::from_secs(300));
     loop {
         tokio::select! {
             request = commands.recv() => {
@@ -226,21 +244,10 @@ pub async fn run(shared: Arc<Shared>, workers: Arc<Workers>, mut commands: mpsc:
                 reachable = true;
                 let _ = request.done.send(());
             }
-            _ = tokio::time::sleep(Duration::from_secs(15)), if !reachable => reachable = account.connect().await,
-            _ = save.tick() => {
-                if shared.read(|status| status.account.step) == AccountStep::Ready {
-                    if let Some(client) = &account.client {
-                        if let Err(error) = client.session().save_to_file(paths::session_file()) { eprintln!("Account: the login could not be saved: {error}"); }
-                    }
-                }
-            }
+            _ = tokio::time::sleep(std::time::Duration::from_secs(15)), if !reachable => reachable = account.connect().await,
             _ = shared.stopped() => break,
         }
     }
-    if shared.read(|status| status.account.step) == AccountStep::Ready {
-        if let Some(client) = &account.client {
-            if let Err(error) = client.session().save_to_file(paths::session_file()) { eprintln!("Account: the login could not be saved: {error}"); }
-        }
-    }
     account.forget().await;
+    account.disconnect().await;
 }

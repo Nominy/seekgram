@@ -1,31 +1,61 @@
 //! The logged-in Telegram client and the read, draft and media-export actions built on it.
 
-use std::{collections::HashMap, fs, sync::{Arc, atomic::{AtomicU64, Ordering}}, time::{Duration, Instant, SystemTime, UNIX_EPOCH}};
-use grammers_client::{Client, Config, grammers_tl_types as tl, types::{Chat, Message, Downloadable, Media, Photo, media::Document}};
-use grammers_session::{PackedType, Session};
-use rusqlite::{params, Connection, OptionalExtension};
+use std::{collections::HashMap, fs, num::NonZeroU32, sync::{Arc, atomic::{AtomicU64, Ordering}}, time::{Duration, Instant, SystemTime, UNIX_EPOCH}};
+use grammers_client::{Client, media::{Document, Downloadable as _, Media, Photo}, message::Message, peer::Peer, tl};
+use grammers_mtsender::{AutoSleep, ConnectionParams, SenderPool, SenderPoolHandle};
+use grammers_session::{types::{PeerId, PeerRef}, updates::UpdatesLike};
+use rusqlite::{params, Connection as Database, OptionalExtension};
 use serde_json::{json, Value};
-use tokio::sync::Mutex;
+use tokio::{sync::{Mutex, mpsc}, task::JoinHandle};
 use uuid::Uuid;
 
 use crate::paths;
 
-static RECONNECT: grammers_mtsender::FixedReconnect = grammers_mtsender::FixedReconnect { attempts: 3, delay: Duration::from_secs(1) };
+use super::{download::Source, session_store::SessionStore};
 
-/// Connects with the stored session, or a new empty one when none exists yet (first login).
-pub async fn connect(api_id: i32, api_hash: &str) -> Result<Client, String> {
-    fs::create_dir_all(paths::data_dir()).map_err(|e| format!("Cannot create the data folder: {e}"))?;
-    let session = Session::load_file_or_create(paths::session_file()).map_err(|e| format!("The saved Telegram login cannot be read: {e}"))?;
-    let mut config = Config { session, api_id, api_hash: api_hash.to_owned(), params: Default::default() };
-    // Telegram throttles file downloads with waits of a second or two whenever the account
-    // downloads heavily, which indexing does constantly. The client sleeps through those and
-    // repeats the request; longer waits surface as errors for the caller to handle.
-    config.params.flood_sleep_threshold = 30;
-    config.params.reconnection_policy = &RECONNECT;
-    Client::connect(config).await.map_err(|e| format!("Could not reach Telegram: {e}"))
+/// Telegram answered with something this build cannot decode: Telegram's API moved on and
+/// Seekgram has to be updated. Never a network problem, so it must not be reported as one.
+pub(crate) const UNREADABLE: &str = "Seekgram cannot read Telegram's replies because Telegram changed its protocol. This needs a Seekgram update, which installs itself once it is released.";
+
+/// A client and the connection pool it sends through. The pool runs until `close`.
+pub struct Connection {
+    pub client: Client,
+    pub session: Arc<SessionStore>,
+    /// Updates Telegram pushes; taken by whoever listens to them.
+    pub updates: Option<mpsc::Receiver<UpdatesLike>>,
+    pool: SenderPoolHandle,
+    runner: JoinHandle<()>,
 }
-fn db() -> Result<Connection, String> {
-    let c = Connection::open(paths::data_dir().join("drafts.sqlite3")).map_err(|e| e.to_string())?;
+
+impl Connection {
+    /// Ends every connection to Telegram. Clients still held elsewhere fail from then on.
+    pub async fn close(self) {
+        self.pool.quit();
+        let _ = self.runner.await;
+    }
+}
+
+/// Opens the stored session, or a new empty one when none exists yet (first login).
+/// Nothing is sent yet; the first request connects.
+pub fn connect(api_id: i32) -> Result<Connection, String> {
+    fs::create_dir_all(paths::data_dir()).map_err(|e| format!("Cannot create the data folder: {e}"))?;
+    let session = Arc::new(SessionStore::open(&paths::session_db(), &paths::legacy_session_file())
+        .map_err(|e| format!("The saved Telegram login cannot be read: {e}"))?);
+    let params = ConnectionParams {
+        // Telegram throttles file downloads with waits of a second or two whenever the account
+        // downloads heavily, which indexing does constantly. The client sleeps through those and
+        // repeats the request; longer waits surface as errors for the caller to handle. A dropped
+        // connection is retried the same way, a second apart.
+        retry_policy: Box::new(AutoSleep { tries: NonZeroU32::new(3).expect("nonzero"), threshold: Duration::from_secs(30), io_errors_as_flood_of: Some(Duration::from_secs(1)) }),
+        ..Default::default()
+    };
+    let SenderPool { runner, handle, updates } = SenderPool::with_configuration(session.clone(), api_id, params);
+    let pool = handle.thin.clone();
+    let client = Client::new(handle);
+    Ok(Connection { client, session, updates: Some(updates), pool, runner: tokio::spawn(runner.run()) })
+}
+fn db() -> Result<Database, String> {
+    let c = Database::open(paths::data_dir().join("drafts.sqlite3")).map_err(|e| e.to_string())?;
     c.busy_timeout(Duration::from_secs(5)).map_err(|e| e.to_string())?;
     c.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS drafts (id TEXT PRIMARY KEY, chat TEXT NOT NULL, text TEXT NOT NULL, state TEXT NOT NULL, created_at INTEGER NOT NULL, result TEXT)").map_err(|e| e.to_string())?;
     Ok(c)
@@ -36,10 +66,49 @@ fn integer(args: &Value, key: &str, default: i64, min: i64, max: i64) -> Result<
     let value = match args.get(key) { None | Some(Value::Null) => default, Some(v) => v.as_i64().ok_or_else(|| format!("{key} must be an integer"))? };
     if !(min..=max).contains(&value) { return Err(format!("{key} must be between {min} and {max}")); } Ok(value)
 }
-pub(crate) fn marked_id(chat: &Chat) -> i64 {
-    match chat.pack().ty { PackedType::User | PackedType::Bot => chat.id(), PackedType::Chat => -chat.id(), _ => -1_000_000_000_000 - chat.id() }
+/// The Bot API form of a chat ID, as the index and settings store it: users positive,
+/// basic groups negative, channels and supergroups below -10^12. grammers' placeholder for
+/// "the logged-in user", which only message senders carry, maps to 0, which no chat has.
+pub(crate) fn marked_id(peer: PeerId) -> i64 {
+    peer.bot_api_dialog_id().unwrap_or(0)
 }
-fn message(m: &Message) -> Value { json!({"message_id":m.id(), "chat_id":marked_id(&m.chat()), "date":m.date().to_rfc3339(), "text":m.text(), "outgoing":m.outgoing()}) }
+fn message(m: &Message) -> Value { json!({"message_id":m.id(), "chat_id":marked_id(m.peer_id()), "date":m.date().to_string(), "text":m.text(), "outgoing":m.outgoing()}) }
+
+/// A chat and the reference that lets this account act on it.
+#[derive(Clone)]
+pub(crate) struct Chat {
+    pub(crate) peer: Peer,
+    pub(crate) reference: PeerRef,
+}
+
+impl Chat {
+    pub(crate) async fn new(peer: Peer) -> Result<Self, String> {
+        let reference = peer.to_ref().await.map_err(|e| format!("The saved Telegram login cannot be read: {e}"))?
+            .ok_or("Telegram did not say how to reach this chat")?;
+        Ok(Self { peer, reference })
+    }
+    /// The chat a message is in.
+    pub(crate) async fn of(message: &Message) -> Result<Self, String> {
+        let peer = message.peer().cloned().ok_or("Telegram did not describe the message's chat")?;
+        let reference = message.peer_ref().await.map_err(|e| format!("The saved Telegram login cannot be read: {e}"))?
+            .ok_or("Telegram did not say how to reach the message's chat")?;
+        Ok(Self { peer, reference })
+    }
+    pub(crate) fn id(&self) -> i64 { marked_id(self.reference.id) }
+    pub(crate) fn name(&self) -> &str { self.peer.name().unwrap_or_default() }
+}
+
+impl From<&Chat> for PeerRef {
+    fn from(chat: &Chat) -> Self { chat.reference }
+}
+
+/// `document` as message media, the form grammers downloads and sends.
+pub(crate) fn document_media(document: tl::enums::Document) -> Document {
+    Document::from_raw_media(tl::types::MessageMediaDocument {
+        nopremium: false, spoiler: false, video: false, round: false, voice: false,
+        document: Some(document), alt_documents: None, video_cover: None, video_timestamp: None, ttl_seconds: None,
+    })
+}
 
 pub struct TelegramService {
     pub(crate) client: Client,
@@ -52,13 +121,13 @@ pub struct TelegramService {
 }
 impl TelegramService {
     /// Wraps a client that is already authorized.
-    pub fn new(client: Client) -> Result<Self, String> {
+    pub fn new(client: Client, session: Arc<SessionStore>) -> Result<Self, String> {
         db()?;
-        let downloads = Arc::new(super::download::Downloader::new(client.clone()));
+        let downloads = Arc::new(super::download::Downloader::new(client.clone(), session));
         Ok(Self { client, downloads, cache: Mutex::new(HashMap::new()), chats: Mutex::new(HashMap::new()), generation: AtomicU64::new(0) })
     }
     pub async fn account_id(&self) -> Result<i64, String> {
-        self.client.get_me().await.map(|user| user.id()).map_err(|e| format!("Fetching Telegram account failed: {e}"))
+        self.client.get_me().await.map(|user| marked_id(user.id())).map_err(|e| format!("Fetching Telegram account failed: {e}"))
     }
     pub(crate) async fn resolve(&self, recipient: &str) -> Result<Chat, String> {
         let r = recipient.trim();
@@ -68,11 +137,12 @@ impl TelegramService {
             if let Some(chat) = chats.get(&id) { return Ok(chat.clone()); }
             let mut dialogs = self.client.iter_dialogs();
             while let Some(d) = dialogs.next().await.map_err(|e| format!("Resolving chat failed: {e}"))? {
-                chats.insert(marked_id(d.chat()), d.chat().clone());
+                chats.insert(marked_id(d.peer_id()), Chat { peer: d.peer().clone(), reference: d.peer_ref() });
             }
             return chats.get(&id).cloned().ok_or_else(|| "Numeric chat ID not found in accessible dialogs; use a username for a public chat".to_string());
         }
-        self.client.resolve_username(r.trim_start_matches('@')).await.map_err(|e| format!("Resolving username failed: {e}"))?.ok_or_else(|| "Username not found".to_string())
+        let peer = self.client.resolve_username(r.trim_start_matches('@')).await.map_err(|e| format!("Resolving username failed: {e}"))?.ok_or_else(|| "Username not found".to_string())?;
+        Chat::new(peer).await
     }
     pub async fn dispatch(&self, action: &str, args: Value) -> Result<Value, String> {
         match action {
@@ -107,10 +177,10 @@ impl TelegramService {
             ("documents", Filter::InputMessagesFilterDocument),
         ];
         let counters = self.client.invoke(&tl::functions::messages::GetSearchCounters {
-            peer: chat.pack().to_input_peer(), saved_peer_id: None, top_msg_id: None,
+            peer: (&chat.reference).into(), saved_peer_id: None, top_msg_id: None,
             filters: kinds.iter().map(|(_, filter)| filter.clone()).collect(),
         }).await.map_err(|e| format!("Counting chat media failed: {e}"))?;
-        let mut result = json!({"chat_id": marked_id(&chat), "inexact": false});
+        let mut result = json!({"chat_id": chat.id(), "inexact": false});
         for counter in counters {
             let tl::enums::messages::SearchCounter::Counter(counter) = counter;
             if let Some((name, _)) = kinds.iter().find(|(_, filter)| *filter == counter.filter) { result[*name] = json!(counter.count); }
@@ -124,7 +194,7 @@ impl TelegramService {
             let offset = integer(args, "offset", 0, 0, 10000)? as usize;
             let mut iter = self.client.iter_dialogs(); let mut items = Vec::new(); let mut skipped = 0;
             while skipped < offset { if iter.next().await.map_err(|e| e.to_string())?.is_none() { break; } skipped += 1; }
-            while items.len() < limit { match iter.next().await.map_err(|e| e.to_string())? { Some(d) => { let c = d.chat(); items.push(json!({"chat_id":marked_id(c),"name":c.name(),"username":c.username()})); }, None => break } }
+            while items.len() < limit { match iter.next().await.map_err(|e| e.to_string())? { Some(d) => { let c = d.peer(); items.push(json!({"chat_id":marked_id(d.peer_id()),"name":c.name(),"username":c.username()})); }, None => break } }
             let next_offset = if items.len() == limit { Some(offset + items.len()) } else { None };
             return Ok(json!({"dialogs":items,"next_offset":next_offset}));
         }
@@ -188,8 +258,8 @@ impl TelegramService {
         let context_limit = integer(args,"context_limit",10,0,30)? as usize;
         let found = self.client.get_messages_by_id(&chat, &[id]).await.map_err(|e| format!("Fetching media message failed: {e}"))?;
         let m = found.into_iter().next().flatten().ok_or("Message not found")?;
-        if marked_id(&m.chat()) != marked_id(&chat) { return Err("Message does not belong to requested chat".into()); }
-        if m.raw.ttl_period.is_some() { return Err("Self-destructing messages cannot be exported".into()); }
+        if m.peer_id() != chat.reference.id { return Err("Message does not belong to requested chat".into()); }
+        if matches!(&m.raw, tl::enums::Message::Message(raw) if raw.ttl_period.is_some()) { return Err("Self-destructing messages cannot be exported".into()); }
         let media = match m.media().ok_or("Message has no downloadable media")? {
             Media::Sticker(sticker) => Media::Document(sticker.document),
             Media::WebPage(page) => match page.raw.webpage {
@@ -197,10 +267,7 @@ impl TelegramService {
                     if let Some(photo) = web.photo {
                         Media::Photo(Photo::from_raw(photo))
                     } else if let Some(document) = web.document {
-                        Media::Document(Document::from_raw_media(tl::types::MessageMediaDocument {
-                            nopremium: false, spoiler: false, video: false, round: false,
-                            voice: false, document: Some(document), alt_document: None, ttl_seconds: None,
-                        }))
+                        Media::Document(document_media(document))
                     } else {
                         return Err("Web preview has no downloadable image or document".into());
                     }
@@ -216,9 +283,9 @@ impl TelegramService {
             }
             Media::Document(document) => {
                 if document.raw.ttl_seconds.is_some() { return Err("Self-destructing documents cannot be exported".into()); }
-                let size = document.size();
-                if size <= 0 { return Err("Document size is unavailable or empty".into()); }
-                if size > MAX_BYTES as i64 { return Err("Media exceeds the 256 MiB export limit".into()); }
+                let size = document.size().unwrap_or(0);
+                if size == 0 { return Err("Document size is unavailable or empty".into()); }
+                if size > MAX_BYTES { return Err("Media exceeds the 256 MiB export limit".into()); }
                 let mime = document.mime_type().ok_or("Document MIME type is unavailable")?.to_ascii_lowercase();
                 let parts: Vec<&str> = mime.split('/').collect();
                 if parts.len() != 2 || !matches!(parts[0], "image" | "audio" | "video")
@@ -239,7 +306,7 @@ impl TelegramService {
         #[cfg(unix)] { options.mode(0o600); }
         let mut file = options.open(&path).await.map_err(|e| e.to_string())?;
         let result: Result<u64, String> = async {
-            let total = self.downloads.save(&Downloadable::Media(media), &mut file, MAX_BYTES as u64, |_| {}, |_| async {})
+            let total = self.downloads.save(&Source::Media(media), &mut file, MAX_BYTES as u64, |_| {}, |_| async {})
                 .await.map_err(|error| error.to_string())?;
             file.sync_all().await.map_err(|e| e.to_string())?;
             Ok(total)

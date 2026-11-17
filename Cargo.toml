@@ -3,7 +3,7 @@ members = ["crates/*"]
 resolver = "3"
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/Nominy/seekgram"
@@ -17,9 +17,11 @@ anyhow = "1"
 axum = "0.8"
 fs2 = "0.4"
 futures-util = "0.3"
-grammers-client = "=0.7.0"
-grammers-session = "=0.7.0"
-grammers-mtsender = "=0.7.0"
+grammers-client = "=0.12.0"
+# The SQLite session storage would link a second SQLite (libsql) next to rusqlite's;
+# session_store.rs keeps the session in rusqlite instead.
+grammers-session = { version = "=0.12.0", default-features = false }
+grammers-mtsender = "=0.12.0"
 gpui = { package = "gpui-pre", version = "=0.3.10" }
 gpui_platform = { package = "gpui-pre-platform", version = "=0.3.10" }
 gpui-component = "=0.8.1"

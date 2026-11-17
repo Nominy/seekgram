@@ -12,6 +12,7 @@ pub mod mcp;
 pub mod provision;
 pub mod search;
 pub mod state;
+mod session_store;
 pub mod telegram;
 pub mod tray;
 pub mod update;

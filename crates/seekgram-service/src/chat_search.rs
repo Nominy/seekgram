@@ -9,10 +9,13 @@
 
 use std::{path::Path, sync::Arc, time::Duration};
 
-use grammers_client::{grammers_tl_types as tl, types::{media::Document, Chat, Downloadable, Media, Message, Photo, User}, InputMedia, InputMessage, Update};
+use grammers_client::{media::{Document, InputMedia, Media, Photo}, message::{InputMessage, Message}, peer::{Peer, User}, tl, update::Update};
+use grammers_mtsender::UpdatesConfiguration;
+use grammers_session::{types::PeerId, updates::UpdatesLike};
 use serde_json::{json, Value};
+use tokio::sync::mpsc;
 
-use super::{state::{SearchChat, Shared}, telegram::{marked_id, TelegramService}, workers::Workers};
+use super::{download::Source, state::{SearchChat, Shared}, telegram::{marked_id, Chat, TelegramService}, workers::Workers};
 
 const PREFIX: &str = "?";
 const PAGE: usize = 10;
@@ -37,10 +40,10 @@ struct Last {
 
 /// Publishes where searches are answered, for the control panel.
 fn publish(shared: &Shared, home: &Chat, me_id: i64) {
-    let saved = matches!(home, Chat::User(user) if user.id() == me_id);
+    let saved = home.id() == me_id;
     shared.update(|status| status.search_chat = SearchChat {
         kind: if saved { "saved" } else { "group" }.to_owned(),
-        id: (!saved).then(|| marked_id(home)),
+        id: (!saved).then(|| home.id()),
         title: if saved { "Saved Messages".to_owned() } else { home.name().to_owned() },
     });
 }
@@ -49,8 +52,11 @@ fn publish(shared: &Shared, home: &Chat, me_id: i64) {
 /// group that cannot be opened is waited for, never replaced by another chat.
 async fn open_home(shared: &Shared, service: &TelegramService, me: &User) -> Option<Chat> {
     loop {
-        let Some(id) = shared.settings().search_chat else { return Some(Chat::User(me.clone())) };
-        match service.resolve(&id.to_string()).await {
+        let opened = match shared.settings().search_chat {
+            None => Chat::new(Peer::User(me.clone())).await,
+            Some(id) => service.resolve(&id.to_string()).await,
+        };
+        match opened {
             Ok(chat) => return Some(chat),
             Err(error) => {
                 eprintln!("Chat search: cannot open the configured chat: {error}");
@@ -98,23 +104,29 @@ async fn create_group(shared: &Shared, service: &TelegramService) -> Result<(), 
 /// Whether `chat` may become the search chat: Saved Messages, or a group with no member
 /// but the user. Results are private pictures, so they must never land in front of anyone else.
 async fn private_to(service: &TelegramService, chat: &Chat, me_id: i64) -> Result<(), String> {
-    match chat {
-        Chat::User(user) if user.id() == me_id => Ok(()),
-        Chat::User(_) => Err("that is a chat with someone else".into()),
-        Chat::Channel(_) => Err("that is a channel; use a group".into()),
-        Chat::Group(_) => {
+    match &chat.peer {
+        Peer::User(user) if marked_id(user.id()) == me_id => Ok(()),
+        Peer::User(_) => Err("that is a chat with someone else".into()),
+        Peer::Channel(_) => Err("that is a channel; use a group".into()),
+        Peer::Community(_) => Err("that is a community; use a group".into()),
+        Peer::Group(_) => {
             let mut members = service.client.iter_participants(chat);
             while let Some(member) = members.next().await.map_err(|error| format!("cannot list its members: {error}"))? {
-                if member.user.id() != me_id { return Err("that group has other members".into()); }
+                if marked_id(member.user.id()) != me_id { return Err("that group has other members".into()); }
             }
             Ok(())
         }
     }
 }
 
-/// Answers searches until shutdown. `me` is the logged-in account.
-pub async fn run(shared: Arc<Shared>, service: Arc<TelegramService>, workers: Arc<Workers>, me: User) {
-    let me_id = me.id();
+/// Answers searches until shutdown. `me` is the logged-in account; `updates` are the ones
+/// Telegram pushes to its client.
+pub async fn run(shared: Arc<Shared>, service: Arc<TelegramService>, workers: Arc<Workers>, me: User, updates: mpsc::Receiver<UpdatesLike>) {
+    let me_id = marked_id(me.id());
+    let mut stream = match service.client.stream_updates(updates, UpdatesConfiguration::default()).await {
+        Ok(stream) => stream,
+        Err(error) => return eprintln!("Chat search: cannot receive Telegram's updates: {error}"),
+    };
     let Some(mut home) = open_home(&shared, &service, &me).await else { return };
     publish(&shared, &home, me_id);
     let mut configured = shared.settings().search_chat;
@@ -123,7 +135,7 @@ pub async fn run(shared: Arc<Shared>, service: Arc<TelegramService>, workers: Ar
     eprintln!("Chat search: listening");
     loop {
         let update = tokio::select! {
-            update = service.client.next_update() => update,
+            update = stream.next() => update,
             _ = changed.changed() => {
                 // The control panel moved the search chat.
                 if shared.settings().search_chat != configured {
@@ -138,7 +150,7 @@ pub async fn run(shared: Arc<Shared>, service: Arc<TelegramService>, workers: Ar
             _ = shared.stopped() => return,
         };
         let message = match update {
-            Ok(Update::NewMessage(message)) => message,
+            Ok(Update::NewMessage(message)) => message.into_inner(),
             Ok(_) => continue,
             Err(error) => {
                 eprintln!("Chat search: update stream error: {error}");
@@ -146,29 +158,32 @@ pub async fn run(shared: Arc<Shared>, service: Arc<TelegramService>, workers: Ar
                 continue;
             }
         };
-        let chat = message.chat();
+        let chat_id = marked_id(message.peer_id());
         // Telegram does not flag Saved Messages posts as outgoing, so authorship is checked three ways.
         // Forwarded messages never count: a forwarded result must not be able to trigger anything.
         let mine = message.forward_header().is_none() && (message.outgoing()
-            || matches!(&chat, Chat::User(user) if user.id() == me_id)
-            || matches!(message.sender(), Some(Chat::User(user)) if user.id() == me_id));
+            || chat_id == me_id
+            || message.sender_id().is_some_and(|sender| sender == PeerId::self_user() || marked_id(sender) == me_id));
         let Some(rest) = message.text().trim().strip_prefix(PREFIX).filter(|_| mine) else { continue };
         let rest = rest.trim().to_owned();
-        let here = marked_id(&chat) == marked_id(&home);
+        let here = chat_id == home.id();
         if rest.eq_ignore_ascii_case("here") {
             // Any refusal is said in the current search chat, never in the chat that was refused.
-            let saved = matches!(&chat, Chat::User(user) if user.id() == me_id);
-            let target = (!saved).then(|| marked_id(&chat));
-            let moved = match private_to(&service, &chat, me_id).await {
-                Ok(()) => shared.set_settings(|settings| {
-                    if target.is_some() { settings.search_group = target; }
-                    else if settings.search_chat.is_some() { settings.search_group = settings.search_chat; }
-                    settings.search_chat = target;
-                }),
+            let saved = chat_id == me_id;
+            let target = (!saved).then_some(chat_id);
+            let moved = match Chat::of(&message).await {
+                Ok(chat) => match private_to(&service, &chat, me_id).await {
+                    Ok(()) => shared.set_settings(|settings| {
+                        if target.is_some() { settings.search_group = target; }
+                        else if settings.search_chat.is_some() { settings.search_group = settings.search_chat; }
+                        settings.search_chat = target;
+                    }).map(|()| chat),
+                    Err(error) => Err(error),
+                },
                 Err(error) => Err(error),
             };
             let reply = match moved {
-                Ok(()) => {
+                Ok(chat) => {
                     home = chat;
                     configured = target;
                     last = None;
@@ -177,7 +192,7 @@ pub async fn run(shared: Arc<Shared>, service: Arc<TelegramService>, workers: Ar
                 }
                 Err(error) => format!("Search was not moved: {error}."),
             };
-            if let Err(error) = service.client.send_message(&home, InputMessage::text(reply)).await { eprintln!("Chat search: cannot reply: {error}"); }
+            if let Err(error) = service.client.send_message(&home, reply).await { eprintln!("Chat search: cannot reply: {error}"); }
             continue;
         }
         if !here { continue; }
@@ -188,7 +203,7 @@ pub async fn run(shared: Arc<Shared>, service: Arc<TelegramService>, workers: Ar
         if let Some(status) = progress.message.take() { let _ = status.delete().await; }
         // An empty reply means the album's own caption already said everything.
         if reply.is_empty() { continue; }
-        if let Err(error) = service.client.send_message(&home, InputMessage::text(reply)).await {
+        if let Err(error) = service.client.send_message(&home, reply).await {
             eprintln!("Chat search: cannot reply: {error}");
         }
     }
@@ -205,8 +220,8 @@ impl Progress<'_> {
     /// Cosmetic only: a failed send or edit never fails the search.
     async fn show(&mut self, text: String) {
         match &self.message {
-            Some(message) => { let _ = message.edit(InputMessage::text(text)).await; }
-            None => self.message = self.service.client.send_message(self.home, InputMessage::text(text)).await.ok(),
+            Some(message) => { let _ = message.edit(text).await; }
+            None => self.message = self.service.client.send_message(self.home, text).await.ok(),
         }
     }
 }
@@ -314,7 +329,7 @@ async fn page(service: &TelegramService, home: &Chat, state: &mut Last, progress
     for (position, original) in originals.iter().enumerate() {
         // A result whose message was deleted since indexing is reported, not replaced.
         let Some(original) = original else { failed += 1; continue };
-        let image_file = |document: &Document| document.size() <= 20 * 1024 * 1024 && document.mime_type().is_some_and(|mime| mime.starts_with("image/"));
+        let image_file = |document: &Document| document.size().unwrap_or(0) <= 20 * 1024 * 1024 && document.mime_type().is_some_and(|mime| mime.starts_with("image/"));
         match original.media() {
             Some(media @ Media::Photo(_)) => album.push((position, media)),
             Some(Media::Document(document)) if !document.is_animated() && document.mime_type().is_some_and(|mime| mime.starts_with("video/")) => album.push((position, Media::Document(document))),
@@ -349,11 +364,11 @@ async fn page(service: &TelegramService, home: &Chat, state: &mut Last, progress
         progress.show("Sending...".to_owned()).await;
         if let [(_, media)] = album.as_slice() {
             // Telegram has no one-item album; a single result is an ordinary media message.
-            service.client.send_message(home, InputMessage::text(&caption).fmt_entities(entities).copy_media(media)).await
+            service.client.send_message(home, InputMessage::new().text(&caption).fmt_entities(entities).copy_media(media)).await
                 .map_err(|error| format!("Telegram rejected the result: {error}"))?;
         } else {
             let medias = album.iter().enumerate().map(|(index, (_, media))| {
-                let item = if index == 0 { InputMedia::caption(&caption).fmt_entities(entities.clone()) } else { InputMedia::caption("") };
+                let item = if index == 0 { InputMedia::new().caption(&caption).fmt_entities(entities.clone()) } else { InputMedia::new().caption("") };
                 item.copy_media(media)
             }).collect();
             service.client.send_album(home, medias).await.map_err(|error| format!("Telegram rejected the album: {error}"))?;
@@ -400,7 +415,7 @@ async fn references(service: &TelegramService, home: &Chat, message: &Message) -
         let path = directory.join(format!("query-{}.jpg", uuid::Uuid::new_v4()));
         let Some(media) = photo.media() else { continue };
         let mut file = tokio::fs::File::create(&path).await.map_err(|error| error.to_string())?;
-        let result = service.downloads.save(&Downloadable::Media(media), &mut file, u64::MAX, |_| {}, |_| async {}).await;
+        let result = service.downloads.save(&Source::Media(media), &mut file, u64::MAX, |_| {}, |_| async {}).await;
         drop(file);
         if let Err(error) = result {
             let _ = tokio::fs::remove_file(&path).await;
@@ -421,18 +436,16 @@ async fn as_photo(service: &TelegramService, home: &Chat, message: &Message) -> 
     let photo = async {
         let media = message.media().ok_or("nothing to download")?;
         let mut file = tokio::fs::File::create(&source).await.map_err(|error| error.to_string())?;
-        service.downloads.save(&Downloadable::Media(media), &mut file, u64::MAX, |_| {}, |_| async {})
+        service.downloads.save(&Source::Media(media), &mut file, u64::MAX, |_| {}, |_| async {})
             .await.map_err(|error| format!("download failed: {error}"))?;
         drop(file);
         let (from, to) = (source.clone(), jpeg.clone());
         tokio::task::spawn_blocking(move || flatten(&from, &to)).await.map_err(|error| error.to_string())?.map_err(|error| format!("cannot decode: {error}"))?;
         let file = service.client.upload_file(&jpeg).await.map_err(|error| format!("upload failed: {error}"))?;
-        let registered = service.client.invoke(&tl::functions::messages::UploadMedia {
-            business_connection_id: None,
-            peer: home.pack().to_input_peer(),
-            media: tl::enums::InputMedia::UploadedPhoto(tl::types::InputMediaUploadedPhoto { spoiler: false, file: file.raw, stickers: None, ttl_seconds: None }),
-        }).await.map_err(|error| format!("Telegram rejected the photo: {error}"))?;
-        Media::from_raw(registered).filter(|media| matches!(media, Media::Photo(_))).ok_or_else(|| "Telegram did not return a photo".to_owned())
+        let photo = tl::types::InputMediaUploadedPhoto { spoiler: false, live_photo: false, file: file.raw, stickers: None, ttl_seconds: None, video: None };
+        let registered = service.client.upload_media(home, tl::enums::InputMedia::UploadedPhoto(photo)).await
+            .map_err(|error| format!("Telegram rejected the photo: {error}"))?;
+        registered.filter(|media| matches!(media, Media::Photo(_))).ok_or_else(|| "Telegram did not return a photo".to_owned())
     }.await;
     let _ = tokio::fs::remove_file(&source).await;
     let _ = tokio::fs::remove_file(&jpeg).await;

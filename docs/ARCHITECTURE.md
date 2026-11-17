@@ -86,7 +86,7 @@ model worker, so service edits do not recompile the GPUI panel.
 | `crates/seekgram-service/src/lib.rs` | Service lifecycle: lock, log, spawn tasks, shut down. |
 | `crates/seekgram-service/src/api.rs` | Control API (below) and mounting of `/mcp`. |
 | `crates/seekgram-service/src/account.rs` | Login state machine; owns `Status.account`. |
-| `crates/seekgram-service/src/telegram.rs`, `mcp.rs`, `search.rs`, `chat_search.rs`, `cache.rs` | Telegram client, MCP protocol, index search, chat search and the media cache. |
+| `crates/seekgram-service/src/telegram.rs`, `session_store.rs`, `download.rs`, `mcp.rs`, `search.rs`, `chat_search.rs`, `cache.rs` | Telegram client and its saved login, file downloads, MCP protocol, index search, chat search and the media cache. |
 | `crates/seekgram-service/src/provision.rs` | Gets ffmpeg, ONNX Runtime with DirectML and the model, picks the engine by self-test; owns `Status.setup`. |
 | `crates/seekgram-service/src/workers.rs` | Pool of model worker processes (`seekgram embed-worker`). |
 | `crates/seekgram-service/src/indexer.rs` | The indexer; owns `Status.indexer` and `Status.index`. |
@@ -157,6 +157,21 @@ pub async fn run(shared: Arc<Shared>, workers: Arc<Workers>);
 `Arc<Workers>` is created once in `service/mod.rs` and also given to `search.rs` for
 query embeddings (`urgent = true`).
 
+### Telegram client and login
+
+grammers 0.12 (Telegram API layer 233) talks to Telegram. Telegram started sending
+layer-233 objects to older clients in November 2026; grammers 0.7 (layer 186) could no
+longer decode a message, so everything failed. A reply grammers cannot decode is an
+`InvocationError::Deserialize`: the indexer stops with `telegram::UNREADABLE` ("needs a
+Seekgram update") instead of blaming the network, and records no per-message failures.
+
+The login lives in `paths::session_db()` (`telegram.sqlite3`), kept by `session_store.rs`
+through rusqlite: grammers' own SQLite storage would link libsql's SQLite next to
+rusqlite's. When that database holds no login yet, the datacenter keys and home DC of
+grammers 0.7's `telegram.session` are imported, so updating does not log the user out.
+Logout deletes both files. `telegram::connect` starts grammers' sender pool;
+`Connection::close` ends it. Pushed updates go to `chat_search.rs` only.
+
 ### Telegram downloads
 
 `crates/seekgram-service/src/download.rs` is shared by indexing, media exports and
@@ -165,9 +180,10 @@ warming that connection before pipelining. `PhotoSize` lacks a DC, so its first
 request discovers one; subsequent parts retain that route.
 Known-size files then pipeline four 512 KiB requests, writing completed responses
 at their offsets. Eight requests at most are in flight across all downloads for
-the logged-in client, independently of indexing concurrency. Cold DC authorization
-is serialized to avoid duplicate exports in grammers. Unknown-size photos remain
-sequential; cached photo bytes need no request.
+the logged-in client, independently of indexing concurrency. A DC other than home
+that answers `AUTH_KEY_UNREGISTERED` gets the login copied (export, then import
+authorization) once; concurrent first requests share that copy. Unknown-size photos
+remain sequential; cached photo bytes need no request.
 
 This follows Telegram Desktop's bounded part-pipelining approach, not its entire
 transport: Desktop also adaptively scales multiple download sessions per DC.
@@ -257,4 +273,4 @@ can be moved in: tables `metadata`, `items`, `checkpoints`, `failures`, `sources
 Do not run `cargo` while several people are editing; the integrator builds once.
 GPUI: `gpui` is the crates.io package `gpui-pre` 0.3.10, with `gpui-component` 0.8.1.
 Sources for both are in `~/.cargo/registry/src/index.crates.io-*/` (read them rather
-than guessing an API); the same goes for `grammers-client-0.7.0`.
+than guessing an API); the same goes for `grammers-client-0.12.0`.
