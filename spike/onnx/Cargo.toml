@@ -1,0 +1,24 @@
+[package]
+name = "onnx-spike"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Standalone feasibility spike; deliberately not part of the seekgram crate.
+[workspace]
+
+[dependencies]
+anyhow = "1"
+half = "2"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "load-dynamic", "half", "cuda", "directml", "api-24"] }
+mozjpeg = { version = "0.10", default-features = false, features = ["parallel"] }
+# Only to switch on panic-unwinding of libjpeg errors (no NASM: plain C build).
+mozjpeg-sys = { version = "2", default-features = false, features = ["unwinding"] }
+rustfft = "6"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokenizers = { version = "0.23", default-features = false, features = ["onig"] }
+
+[profile.release]
+debug = 1

@@ -1,0 +1,63 @@
+{"id": "t00", "kind": "text", "input": "a bear looking at the camera", "_photo": 14}
+{"id": "t01", "kind": "text", "input": "чёрный щенок на деревянном полу", "_photo": 12}
+{"id": "t02", "kind": "text", "input": "фиолетовый цветок крупным планом", "_photo": 8}
+{"id": "t03", "kind": "text", "input": "игровой контроллер на столе", "_photo": 5}
+{"id": "t04", "kind": "text", "input": "woman in sunglasses holding flowers", "_photo": 4}
+{"id": "t05", "kind": "text", "input": "турист с рюкзаком в горах", "_photo": 10}
+{"id": "t06", "kind": "text", "input": "highland cow on a beach", "_photo": 11}
+{"id": "t07", "kind": "text", "input": "свежие овощи и лук на разделочной доске", "_photo": 13}
+{"id": "t08", "kind": "text", "input": "Laptop auf einem weißen Schreibtisch", "_photo": 7}
+{"id": "t09", "kind": "text", "input": "un río en un bosque verde", "_photo": 2}
+{"id": "t10", "kind": "text", "input": "des teckels qui reniflent l'herbe", "_photo": 9}
+{"id": "t11", "kind": "text", "input": "森の向こうに見える海", "_photo": 0}
+{"id": "t12", "kind": "text", "input": "кошачий нос крупным планом", "_photo": 3}
+{"id": "t13", "kind": "text", "input": "feet in sneakers resting in a field", "_photo": 6}
+{"id": "t14", "kind": "text", "input": "хаски в шлейке", "_photo": 15}
+{"id": "t15", "kind": "text", "input": "design books, pencils and a phone on a desk", "_photo": 1}
+{"id": "t16", "kind": "text", "input": "кот", "_photo": null}
+{"id": "t17", "kind": "text", "input": "The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. ", "_photo": null}
+{"id": "t18", "kind": "text", "input": "фото заката 2019 года, море, пляж 🌅 #отпуск", "_photo": null}
+{"id": "t19", "kind": "text", "input": "مدينة قديمة في الليل", "_photo": null}
+{"id": "i_p00", "kind": "image", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\photos\\p00_id10_1600x1067.jpg"}
+{"id": "i_p01", "kind": "image", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\photos\\p01_id20_1200x800.jpg"}
+{"id": "i_p02", "kind": "image", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\photos\\p02_id28_1280x960.jpg"}
+{"id": "i_p03", "kind": "image", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\photos\\p03_id40_900x1200.jpg"}
+{"id": "i_p04", "kind": "image", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\photos\\p04_id64_800x800.jpg"}
+{"id": "i_p05", "kind": "image", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\photos\\p05_id96_1920x1080.jpg"}
+{"id": "i_p06", "kind": "image", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\photos\\p06_id103_1024x1536.jpg"}
+{"id": "i_p07", "kind": "image", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\photos\\p07_id119_1400x933.jpg"}
+{"id": "i_p08", "kind": "image", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\photos\\p08_id152_1000x1500.jpg"}
+{"id": "i_p09", "kind": "image", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\photos\\p09_id169_2000x1000.jpg"}
+{"id": "i_p10", "kind": "image", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\photos\\p10_id177_640x480.jpg"}
+{"id": "i_p11", "kind": "image", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\photos\\p11_id200_1500x1000.jpg"}
+{"id": "i_p12", "kind": "image", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\photos\\p12_id237_1200x1200.jpg"}
+{"id": "i_p13", "kind": "image", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\photos\\p13_id292_1280x853.jpg"}
+{"id": "i_p14", "kind": "image", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\photos\\p14_id433_1100x1400.jpg"}
+{"id": "i_p15", "kind": "image", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\photos\\p15_id659_2400x900.jpg"}
+{"id": "i_x16", "kind": "image", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\photos\\x16_testsrc2_1280x720.png"}
+{"id": "i_x17", "kind": "image", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\photos\\x17_tiny_96x64.png"}
+{"id": "i_x18", "kind": "image", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\photos\\x18_gray_1000x1500.jpg"}
+{"id": "i_x19", "kind": "image", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\photos\\x19_alpha_800x800.png"}
+{"id": "i_x20", "kind": "image", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\photos\\x20_webp_1280x853.webp"}
+{"id": "i_x21", "kind": "image", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\photos\\x21_strip_3000x300.png"}
+{"id": "i_x22", "kind": "image", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\photos\\x22_exif6_1200x900.jpg"}
+{"id": "a00", "kind": "audio", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\audio\\a0_sweep_30s.wav", "start_seconds": 0, "end_seconds": 30}
+{"id": "a01", "kind": "audio", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\audio\\a1_pink_30s.flac", "start_seconds": 0, "end_seconds": 30}
+{"id": "a02", "kind": "audio", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\audio\\a2_chords_45s.mp3", "start_seconds": 0, "end_seconds": 30}
+{"id": "a03", "kind": "audio", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\audio\\a2_chords_45s.mp3", "start_seconds": 15, "end_seconds": 45}
+{"id": "a04", "kind": "audio", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\audio\\a3_formant_20s.wav", "start_seconds": 0, "end_seconds": 20}
+{"id": "a05", "kind": "audio", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\audio\\a4_short_3.7s.ogg"}
+{"id": "a06", "kind": "audio", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\audio\\a5_quiet_12s.wav", "start_seconds": 0, "end_seconds": 12}
+{"id": "a07", "kind": "audio", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\audio\\a6_speech_en.wav"}
+{"id": "a08", "kind": "audio", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\audio\\a7_speech_ru.wav", "start_seconds": 0, "end_seconds": 30}
+{"id": "a09", "kind": "audio", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\audio\\a1_pink_30s.flac", "start_seconds": 10, "end_seconds": 25.5}
+{"id": "v00", "kind": "video", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\video\\v0_testsrc2_30s.mp4"}
+{"id": "v01", "kind": "video", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\video\\v1_mandelbrot_30s.mp4"}
+{"id": "v02", "kind": "video", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\video\\v2_slideshow_72s.mp4", "start_seconds": 0, "end_seconds": 30}
+{"id": "v03", "kind": "video", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\video\\v2_slideshow_72s.mp4", "start_seconds": 30, "end_seconds": 60}
+{"id": "v04", "kind": "video", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\video\\v2_slideshow_72s.mp4", "start_seconds": 60, "end_seconds": 72}
+{"id": "v05", "kind": "video", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\video\\v3_kenburns_portrait_24s.mp4"}
+{"id": "v06", "kind": "video", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\video\\v4_slides_58s.webm", "start_seconds": 0, "end_seconds": 58}
+{"id": "v07", "kind": "video", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\video\\v5_short_0.4s.mp4"}
+{"id": "v08", "kind": "video", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\video\\v6_life_10s.mkv"}
+{"id": "v09", "kind": "video", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\video\\v1_mandelbrot_30s.mp4", "start_seconds": 12.5, "end_seconds": 27.25}

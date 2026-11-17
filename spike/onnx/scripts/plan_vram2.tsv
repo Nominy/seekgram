@@ -1,0 +1,4 @@
+rust	vr_cuda_fp16_vb8_shrink	cuda	fp16	media/vram_video.jsonl	--timing	--stats	--graphs	text,vision	--vision-batch	8	--shrink-arena
+rust	vr_cuda_fp16_vb2_shrink	cuda	fp16	media/vram_video.jsonl	--timing	--stats	--graphs	text,vision	--vision-batch	2	--shrink-arena
+rust	vr_cuda_fp32_vb8_shrink	cuda	fp32	media/vram_video.jsonl	--timing	--stats	--graphs	text,vision	--vision-batch	8	--shrink-arena
+rust	vr_cuda_fp32_vb2_shrink	cuda	fp32	media/vram_video.jsonl	--timing	--stats	--graphs	text,vision	--vision-batch	2	--shrink-arena

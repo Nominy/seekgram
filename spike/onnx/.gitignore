@@ -1,0 +1,9 @@
+.pyenv/
+media/photos/
+models/
+runs/dump_rust/
+runs/trace_cpu32/
+runs/trace_gpu/
+runtimes/
+target-alt/
+target/

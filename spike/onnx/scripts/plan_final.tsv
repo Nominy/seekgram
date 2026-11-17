@@ -1,0 +1,6 @@
+# Final short plan (owner priority: correctness, DirectML, CPU; one single-stream image rate per provider).
+rust	fid_dmlp_fp16	dml	fp16	media/requests.jsonl	--stats
+rust	fid_dmlp_fp32	dml	fp32	media/requests.jsonl	--stats
+rust	sp_dml_fp16_image_single	dml	fp16	media/bench_image46.jsonl	--timing	--stats	--graphs	text,vision
+rust	sp_dml_fp32_image_single	dml	fp32	media/bench_image46.jsonl	--timing	--stats	--graphs	text,vision
+rust	sp_cpu_fp32_image_single	cpu	fp32	media/bench_image46.jsonl	--timing	--stats	--graphs	text,vision

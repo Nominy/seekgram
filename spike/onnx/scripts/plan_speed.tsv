@@ -1,0 +1,35 @@
+# Speed matrix. single = one request at a time like the worker; bN wM = --bulk --batch N --workers M (preprocessing threads).
+rust	fid_dmlp_fp16	dml	fp16	media/requests.jsonl	--stats
+rust	fid_dmlp_fp32	dml	fp32	media/requests.jsonl	--stats
+python	py_image	media/bench_image.jsonl
+python	py_audio30	media/bench_audio30.jsonl
+python	py_video30	media/bench_video30.jsonl
+rust	sp_cuda_fp16_image_single	cuda	fp16	media/bench_image.jsonl	--timing	--stats	--graphs	text,vision
+rust	sp_cuda_fp16_image_b1w4	cuda	fp16	media/bench_image.jsonl	--bulk	--batch	1	--workers	4	--stats	--graphs	text,vision
+rust	sp_cuda_fp16_image_b4w4	cuda	fp16	media/bench_image.jsonl	--bulk	--batch	4	--workers	4	--stats	--graphs	text,vision
+rust	sp_cuda_fp16_image_b8w6	cuda	fp16	media/bench_image.jsonl	--bulk	--batch	8	--workers	6	--stats	--graphs	text,vision
+rust	sp_cuda_fp16_image_b16w8	cuda	fp16	media/bench_image.jsonl	--bulk	--batch	16	--workers	8	--stats	--graphs	text,vision
+rust	sp_cuda_fp16_audio30_single	cuda	fp16	media/bench_audio30.jsonl	--timing	--stats	--graphs	text,audio
+rust	sp_cuda_fp16_audio30_b4w4	cuda	fp16	media/bench_audio30.jsonl	--bulk	--batch	4	--workers	4	--stats	--graphs	text,audio
+rust	sp_cuda_fp16_video30_single	cuda	fp16	media/bench_video30.jsonl	--timing	--stats	--graphs	text,vision
+rust	sp_cuda_fp16_video30_b1w3	cuda	fp16	media/bench_video30.jsonl	--bulk	--batch	1	--workers	3	--stats	--graphs	text,vision
+rust	sp_cuda_fp16_video30_b2w4	cuda	fp16	media/bench_video30.jsonl	--bulk	--batch	2	--workers	4	--stats	--graphs	text,vision
+rust	sp_cuda_fp32_image_single	cuda	fp32	media/bench_image.jsonl	--timing	--stats	--graphs	text,vision
+rust	sp_cuda_fp32_image_b1w4	cuda	fp32	media/bench_image.jsonl	--bulk	--batch	1	--workers	4	--stats	--graphs	text,vision
+rust	sp_cuda_fp32_image_b4w4	cuda	fp32	media/bench_image.jsonl	--bulk	--batch	4	--workers	4	--stats	--graphs	text,vision
+rust	sp_cuda_fp32_image_b8w6	cuda	fp32	media/bench_image.jsonl	--bulk	--batch	8	--workers	6	--stats	--graphs	text,vision
+rust	sp_cuda_fp32_image_b16w8	cuda	fp32	media/bench_image.jsonl	--bulk	--batch	16	--workers	8	--stats	--graphs	text,vision
+rust	sp_cuda_fp32_audio30_single	cuda	fp32	media/bench_audio30.jsonl	--timing	--stats	--graphs	text,audio
+rust	sp_cuda_fp32_audio30_b4w4	cuda	fp32	media/bench_audio30.jsonl	--bulk	--batch	4	--workers	4	--stats	--graphs	text,audio
+rust	sp_cuda_fp32_video30_single	cuda	fp32	media/bench_video30.jsonl	--timing	--stats	--graphs	text,vision
+rust	sp_cuda_fp32_video30_b1w3	cuda	fp32	media/bench_video30.jsonl	--bulk	--batch	1	--workers	3	--stats	--graphs	text,vision
+rust	sp_cuda_fp32_video30_b2w4	cuda	fp32	media/bench_video30.jsonl	--bulk	--batch	2	--workers	4	--stats	--graphs	text,vision
+rust	sp_dml_fp16_image_single	dml	fp16	media/bench_image.jsonl	--timing	--stats	--graphs	text,vision
+rust	sp_dml_fp16_image_b8w6	dml	fp16	media/bench_image.jsonl	--bulk	--batch	8	--workers	6	--stats	--graphs	text,vision
+rust	sp_dml_fp32_image_single	dml	fp32	media/bench_image.jsonl	--timing	--stats	--graphs	text,vision
+rust	sp_dml_fp32_image_b8w6	dml	fp32	media/bench_image.jsonl	--bulk	--batch	8	--workers	6	--stats	--graphs	text,vision
+rust	sp_cpu_fp32_image_single	cpu	fp32	media/bench_image46.jsonl	--timing	--stats	--graphs	text,vision
+rust	sp_cpu_quantized_image_single	cpu	quantized	media/bench_image46.jsonl	--timing	--stats	--graphs	text,vision
+rust	sp_cpu_fp32_image_b4w2	cpu	fp32	media/bench_image46.jsonl	--bulk	--batch	4	--workers	2	--stats	--graphs	text,vision
+rust	sp_cuda13_fp16_image_single	cuda13	fp16	media/bench_image.jsonl	--timing	--stats	--graphs	text,vision
+rust	sp_cuda13_fp16_image_b8w6	cuda13	fp16	media/bench_image.jsonl	--bulk	--batch	8	--workers	6	--stats	--graphs	text,vision

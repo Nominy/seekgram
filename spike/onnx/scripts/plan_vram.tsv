@@ -1,0 +1,7 @@
+# VRAM / arena experiment on the six longest video requests (up to 4226 tokens).
+rust	vr_cuda_fp16_default	cuda	fp16	media/vram_video.jsonl	--timing	--stats	--graphs	text,vision
+rust	vr_cuda_fp16_exact	cuda	fp16	media/vram_video.jsonl	--timing	--stats	--graphs	text,vision	--arena-exact
+rust	vr_cuda_fp16_exact_shrink	cuda	fp16	media/vram_video.jsonl	--timing	--stats	--graphs	text,vision	--arena-exact	--shrink-arena
+rust	vr_cuda_fp32_default	cuda	fp32	media/vram_video.jsonl	--timing	--stats	--graphs	text,vision
+rust	vr_cuda_fp32_exact	cuda	fp32	media/vram_video.jsonl	--timing	--stats	--graphs	text,vision	--arena-exact
+rust	vr_cuda_fp32_exact_shrink	cuda	fp32	media/vram_video.jsonl	--timing	--stats	--graphs	text,vision	--arena-exact	--shrink-arena

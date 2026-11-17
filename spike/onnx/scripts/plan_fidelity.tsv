@@ -1,0 +1,12 @@
+# Fidelity matrix: full 63-request set per provider/precision.
+rust	fid_cuda_fp16	cuda	fp16	media/requests.jsonl	--stats
+rust	fid_cuda_fp32	cuda	fp32	media/requests.jsonl	--stats
+rust	fid_cuda_q4f16	cuda	q4f16	media/requests.jsonl	--stats
+rust	fid_cuda_q4	cuda	q4	media/requests.jsonl	--stats
+rust	fid_cuda_quantized	cuda	quantized	media/requests.jsonl	--stats
+rust	fid_dml_fp16	dml	fp16	media/requests.jsonl	--stats
+rust	fid_dml_fp32	dml	fp32	media/requests.jsonl	--stats
+rust	fid_cpu_fp32	cpu	fp32	media/requests.jsonl	--stats
+rust	fid_cpu_quantized	cpu	quantized	media/requests.jsonl	--stats
+rust	fid_cuda13_fp16	cuda13	fp16	media/requests.jsonl	--stats
+rust	fid_cuda13_fp32	cuda13	fp32	media/requests.jsonl	--stats

@@ -1,0 +1,6 @@
+{"id": "v00", "kind": "video", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\video\\v0_testsrc2_30s.mp4"}
+{"id": "v01", "kind": "video", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\video\\v1_mandelbrot_30s.mp4"}
+{"id": "v02", "kind": "video", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\video\\v2_slideshow_72s.mp4", "start_seconds": 0, "end_seconds": 30}
+{"id": "v03", "kind": "video", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\video\\v2_slideshow_72s.mp4", "start_seconds": 30, "end_seconds": 60}
+{"id": "v05", "kind": "video", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\video\\v3_kenburns_portrait_24s.mp4"}
+{"id": "v06", "kind": "video", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\video\\v4_slides_58s.webm", "start_seconds": 0, "end_seconds": 58}

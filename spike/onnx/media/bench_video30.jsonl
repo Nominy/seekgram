@@ -1,0 +1,12 @@
+{"id": "v00_r0", "kind": "video", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\video\\v0_testsrc2_30s.mp4"}
+{"id": "v01_r0", "kind": "video", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\video\\v1_mandelbrot_30s.mp4"}
+{"id": "v02_r0", "kind": "video", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\video\\v2_slideshow_72s.mp4", "start_seconds": 0, "end_seconds": 30}
+{"id": "v03_r0", "kind": "video", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\video\\v2_slideshow_72s.mp4", "start_seconds": 30, "end_seconds": 60}
+{"id": "v00_r1", "kind": "video", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\video\\v0_testsrc2_30s.mp4"}
+{"id": "v01_r1", "kind": "video", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\video\\v1_mandelbrot_30s.mp4"}
+{"id": "v02_r1", "kind": "video", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\video\\v2_slideshow_72s.mp4", "start_seconds": 0, "end_seconds": 30}
+{"id": "v03_r1", "kind": "video", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\video\\v2_slideshow_72s.mp4", "start_seconds": 30, "end_seconds": 60}
+{"id": "v00_r2", "kind": "video", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\video\\v0_testsrc2_30s.mp4"}
+{"id": "v01_r2", "kind": "video", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\video\\v1_mandelbrot_30s.mp4"}
+{"id": "v02_r2", "kind": "video", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\video\\v2_slideshow_72s.mp4", "start_seconds": 0, "end_seconds": 30}
+{"id": "v03_r2", "kind": "video", "input": "C:\\Users\\User\\Desktop\\dev\\seekgram\\spike\\onnx\\media\\video\\v2_slideshow_72s.mp4", "start_seconds": 30, "end_seconds": 60}
