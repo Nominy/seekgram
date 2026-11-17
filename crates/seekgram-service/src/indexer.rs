@@ -23,7 +23,6 @@ use grammers_client::{
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use serde_json::{Value, json};
 use tokio::{
-    io::AsyncWriteExt,
     process::Command,
     sync::oneshot,
     task::JoinSet,
@@ -67,6 +66,9 @@ const MAX_MEDIA_BYTES: u64 = 1024 * 1024 * 1024;
 /// no longer downloaded again on every pass.
 const MAX_ATTEMPTS: i64 = 3;
 const NETWORK_TIMEOUT: Duration = Duration::from_secs(180);
+const DEFERRED_DOWNLOAD: &str = "telegram:download_deferred";
+/// Old failures must not monopolize a pass before other chats can make progress.
+const RETRY_BATCH: usize = 4;
 const TOOL_TIMEOUT: Duration = Duration::from_secs(600);
 /// Between two passes over all chats, and before trying again after a failure.
 const PASS_INTERVAL: Duration = Duration::from_secs(60);
@@ -494,8 +496,13 @@ fn checkpoint(db: &Connection, chat_id: i64) -> rusqlite::Result<i32> {
 }
 
 fn retryable_failures(db: &Connection, chat_id: i64) -> rusqlite::Result<Vec<i32>> {
-    let mut statement = db.prepare("SELECT message_id FROM failures WHERE chat_id=?1 AND attempts < ?2 ORDER BY message_id")?;
-    statement.query_map(params![chat_id, MAX_ATTEMPTS], |row| row.get(0))?.collect()
+    let mut statement = db.prepare(
+        "SELECT message_id FROM failures WHERE chat_id=?1 AND
+         ((error_type != ?3 AND attempts < ?2) OR
+          (error_type = ?3 AND julianday(updated_at) <= julianday('now','-15 minutes')))
+         ORDER BY message_id LIMIT ?4"
+    )?;
+    statement.query_map(params![chat_id, MAX_ATTEMPTS, DEFERRED_DOWNLOAD, RETRY_BATCH], |row| row.get(0))?.collect()
 }
 
 fn record_failure(db: &Connection, chat_id: i64, message_id: i32, code: &str) -> rusqlite::Result<()> {
@@ -1172,6 +1179,7 @@ struct Session {
     workers: Arc<Workers>,
     progress: Arc<Progress>,
     client: Client,
+    downloads: Arc<super::download::Downloader>,
     flood: Flood,
     db: Db,
 }
@@ -1191,7 +1199,8 @@ async fn index(shared: &Arc<Shared>, workers: &Arc<Workers>, progress: &Arc<Prog
 
 impl Session {
     async fn start(shared: &Arc<Shared>, workers: &Arc<Workers>, progress: &Arc<Progress>) -> Result<Self, Halt> {
-        let client = shared.telegram().await.map_err(Halt::Failed)?.client.clone();
+        let telegram = shared.telegram().await.map_err(Halt::Failed)?;
+        let client = telegram.client.clone();
         let flood = Flood::restore(shared.clone())?;
         guard(shared, flood.wait()).await?;
         let account_id = loop {
@@ -1201,7 +1210,7 @@ impl Session {
             }
         };
         let db = guard(shared, Db::open(account_id)).await??;
-        Ok(Self { shared: shared.clone(), workers: workers.clone(), progress: progress.clone(), client, flood, db })
+        Ok(Self { shared: shared.clone(), workers: workers.clone(), progress: progress.clone(), client, downloads: telegram.downloads.clone(), flood, db })
     }
 
     async fn guard<T>(&self, work: impl Future<Output = T>) -> Result<T, Halt> {
@@ -1283,11 +1292,10 @@ impl Session {
         let scanned = self.db.call(move |db| checkpoint(db, chat_id)).await?;
         let current = CurrentChat { id: chat_id, title: chat.title.clone(), message_id: scanned, top_message_id: chat.top };
         self.progress.set(|tally| tally.chat = Some(current));
-        self.retry_failures(chat).await?;
         // Nothing newer than the checkpoint: no need to ask Telegram for an empty page
         // per chat on every pass.
         if chat.top > 0 && chat.top <= scanned {
-            return Ok(());
+            return self.retry_failures(chat).await;
         }
         let mut tasks = JoinSet::new();
         let outcome = self.scan(chat, scanned, &mut tasks).await;
@@ -1296,10 +1304,11 @@ impl Session {
         }
         // Whatever is still in flight is cancelled; the checkpoint never passed it.
         tasks.shutdown().await;
-        outcome
+        outcome?;
+        self.retry_failures(chat).await
     }
 
-    /// Tries the chat's recorded failures again, one at a time.
+    /// Retries a bounded batch of old failures after scanning the chat's fresh history.
     async fn retry_failures(&self, chat: &ChatRef) -> Result<(), Fault> {
         let chat_id = chat.id;
         for id in self.db.call(move |db| retryable_failures(db, chat_id)).await? {
@@ -1408,17 +1417,15 @@ impl Session {
     /// Only what stops the whole indexer comes back as an error.
     async fn index_media(&self, chat_id: i64, id: i32, target: Target) -> Result<(), Halt> {
         let _in_flight = self.progress.in_flight();
-        loop {
-            match self.index_media_once(chat_id, id, &target).await {
-                Ok(()) => return self.db.call(move |db| clear_failure(db, chat_id, id)).await,
-                // The download starts over after the pause; chunks already stored are kept.
-                Err(Fault::Flood(seconds)) => {
-                    self.flood.report(seconds);
-                    self.flood.wait().await;
-                }
-                Err(Fault::Halt(halt)) => return Err(halt),
-                Err(Fault::Code(code)) => return self.fail(chat_id, id, code).await,
+        match self.index_media_once(chat_id, id, &target).await {
+            Ok(()) => self.db.call(move |db| clear_failure(db, chat_id, id)).await,
+            Err(Fault::Flood(seconds)) => {
+                self.flood.report(seconds);
+                self.flood.wait().await;
+                self.fail(chat_id, id, DEFERRED_DOWNLOAD.to_owned()).await
             }
+            Err(Fault::Halt(halt)) => Err(halt),
+            Err(Fault::Code(code)) => self.fail(chat_id, id, code).await,
         }
     }
 
@@ -1463,26 +1470,21 @@ impl Session {
         self.flood.clear().await;
         let Some(downloadable) = &target.download else { return Err(code("empty or unavailable media")) };
         let mut file = tokio::fs::File::create(destination).await.map_err(scratch_failure)?;
-        let mut chunks = self.client.iter_download(downloadable);
-        let mut received = 0u64;
-        loop {
-            let chunk = match timeout(NETWORK_TIMEOUT, chunks.next()).await {
-                Ok(Ok(Some(chunk))) => chunk,
-                Ok(Ok(None)) => break,
-                Ok(Err(error)) => return Err(telegram_fault(&error)),
-                Err(_) => return Err(code("timeout:downloading")),
-            };
-            received += chunk.len() as u64;
-            if received > MAX_MEDIA_BYTES {
-                return Err(too_large());
+        self.downloads.save(downloadable, &mut file, MAX_MEDIA_BYTES,
+            |bytes| self.progress.note(|tally| tally.bytes_downloaded += bytes),
+            |seconds| async move { self.flood.report(seconds); self.flood.wait().await; }).await.map_err(|error| {
+            use super::download::Error;
+            match error {
+                Error::Telegram(error) => telegram_fault(&error),
+                Error::Io(error) => scratch_failure(error).into(),
+                Error::Timeout => code("timeout:downloading"),
+                Error::TooLarge => too_large(),
+                Error::Deferred => code(DEFERRED_DOWNLOAD),
+                Error::Empty => code("empty or unavailable media"),
+                Error::SizeMismatch => code("download size differs from Telegram metadata"),
+                Error::Protocol(reason) => code(reason),
             }
-            file.write_all(&chunk).await.map_err(scratch_failure)?;
-            self.progress.note(|tally| tally.bytes_downloaded += chunk.len() as u64);
-        }
-        file.flush().await.map_err(scratch_failure)?;
-        if received == 0 {
-            return Err(code("empty or unavailable media"));
-        }
+        })?;
         Ok(())
     }
 
@@ -1726,6 +1728,25 @@ mod tests {
         assert!(!has_item(&db, -100, 7, "image", 0).unwrap());
         assert!(has_item(&db, -100, 8, "image", 0).unwrap());
         assert_eq!(count(&db, "SELECT COUNT(*) FROM sources"), 1);
+    }
+
+    #[test]
+    fn deferred_download_failures_wait_then_retry_without_becoming_permanent() {
+        let db = fresh();
+        for _ in 0..4 {
+            record_failure(&db, -100, 1, DEFERRED_DOWNLOAD).unwrap();
+            record_failure(&db, -100, 2, "invalid probe output").unwrap();
+        }
+        assert!(retryable_failures(&db, -100).unwrap().is_empty());
+        assert_eq!(count(&db, "SELECT COUNT(*) FROM failures"), 2);
+        db.execute("UPDATE failures SET updated_at='2000-01-01T00:00:00+00:00'", []).unwrap();
+        assert_eq!(retryable_failures(&db, -100).unwrap(), [1]);
+        record_failure(&db, -100, 1, DEFERRED_DOWNLOAD).unwrap();
+        assert!(retryable_failures(&db, -100).unwrap().is_empty());
+        clear_failure(&db, -100, 1).unwrap();
+        assert_eq!(count(&db, "SELECT COUNT(*) FROM failures"), 1);
+        for id in 10..20 { record_failure(&db, -100, id, "timeout:downloading").unwrap(); }
+        assert_eq!(retryable_failures(&db, -100).unwrap(), [10, 11, 12, 13]);
     }
 
     #[test]

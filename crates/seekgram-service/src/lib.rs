@@ -5,6 +5,7 @@ pub mod account;
 pub mod api;
 pub mod cache;
 pub mod chat_search;
+mod download;
 pub mod indexer;
 pub mod install;
 pub mod mcp;

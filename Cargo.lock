@@ -6501,6 +6501,7 @@ dependencies = [
  "axum",
  "flate2",
  "fs2",
+ "futures-util",
  "grammers-client",
  "grammers-mtsender",
  "grammers-session",

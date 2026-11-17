@@ -16,6 +16,7 @@ seekgram-app = { path = "crates/seekgram-app" }
 anyhow = "1"
 axum = "0.8"
 fs2 = "0.4"
+futures-util = "0.3"
 grammers-client = "=0.7.0"
 grammers-session = "=0.7.0"
 grammers-mtsender = "=0.7.0"

@@ -9,7 +9,7 @@
 
 use std::{path::Path, sync::Arc, time::Duration};
 
-use grammers_client::{grammers_tl_types as tl, types::{media::Document, Chat, Media, Message, Photo, User}, InputMedia, InputMessage, Update};
+use grammers_client::{grammers_tl_types as tl, types::{media::Document, Chat, Downloadable, Media, Message, Photo, User}, InputMedia, InputMessage, Update};
 use serde_json::{json, Value};
 
 use super::{state::{SearchChat, Shared}, telegram::{marked_id, TelegramService}, workers::Workers};
@@ -398,7 +398,14 @@ async fn references(service: &TelegramService, home: &Chat, message: &Message) -
     let mut paths = Vec::with_capacity(photos.len());
     for photo in photos {
         let path = directory.join(format!("query-{}.jpg", uuid::Uuid::new_v4()));
-        if !photo.download_media(&path).await.map_err(|error| format!("cannot download the photo: {error}"))? { continue; }
+        let Some(media) = photo.media() else { continue };
+        let mut file = tokio::fs::File::create(&path).await.map_err(|error| error.to_string())?;
+        let result = service.downloads.save(&Downloadable::Media(media), &mut file, u64::MAX, |_| {}, |_| async {}).await;
+        drop(file);
+        if let Err(error) = result {
+            let _ = tokio::fs::remove_file(&path).await;
+            return Err(format!("cannot download the photo: {error}"));
+        }
         paths.push(path.to_string_lossy().into_owned());
     }
     Ok(paths)
@@ -412,7 +419,11 @@ async fn as_photo(service: &TelegramService, home: &Chat, message: &Message) -> 
     let source = directory.join(format!("album-{}", uuid::Uuid::new_v4()));
     let jpeg = source.with_extension("jpg");
     let photo = async {
-        if !message.download_media(&source).await.map_err(|error| format!("download failed: {error}"))? { return Err("nothing to download".to_owned()); }
+        let media = message.media().ok_or("nothing to download")?;
+        let mut file = tokio::fs::File::create(&source).await.map_err(|error| error.to_string())?;
+        service.downloads.save(&Downloadable::Media(media), &mut file, u64::MAX, |_| {}, |_| async {})
+            .await.map_err(|error| format!("download failed: {error}"))?;
+        drop(file);
         let (from, to) = (source.clone(), jpeg.clone());
         tokio::task::spawn_blocking(move || flatten(&from, &to)).await.map_err(|error| error.to_string())?.map_err(|error| format!("cannot decode: {error}"))?;
         let file = service.client.upload_file(&jpeg).await.map_err(|error| format!("upload failed: {error}"))?;

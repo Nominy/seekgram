@@ -1,11 +1,11 @@
 //! The logged-in Telegram client and the read, draft and media-export actions built on it.
 
-use std::{collections::HashMap, fs, sync::atomic::{AtomicU64, Ordering}, time::{Duration, Instant, SystemTime, UNIX_EPOCH}};
+use std::{collections::HashMap, fs, sync::{Arc, atomic::{AtomicU64, Ordering}}, time::{Duration, Instant, SystemTime, UNIX_EPOCH}};
 use grammers_client::{Client, Config, grammers_tl_types as tl, types::{Chat, Message, Downloadable, Media, Photo, media::Document}};
 use grammers_session::{PackedType, Session};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
-use tokio::{io::AsyncWriteExt, sync::Mutex};
+use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::paths;
@@ -43,6 +43,7 @@ fn message(m: &Message) -> Value { json!({"message_id":m.id(), "chat_id":marked_
 
 pub struct TelegramService {
     pub(crate) client: Client,
+    pub(crate) downloads: Arc<super::download::Downloader>,
     cache: Mutex<HashMap<String, (Instant, Value)>>,
     /// Chats by marked ID from the last dialog listing. Listing dialogs for every
     /// lookup drew Telegram flood waits; a miss relists once, which also finds new chats.
@@ -53,7 +54,8 @@ impl TelegramService {
     /// Wraps a client that is already authorized.
     pub fn new(client: Client) -> Result<Self, String> {
         db()?;
-        Ok(Self { client, cache: Mutex::new(HashMap::new()), chats: Mutex::new(HashMap::new()), generation: AtomicU64::new(0) })
+        let downloads = Arc::new(super::download::Downloader::new(client.clone()));
+        Ok(Self { client, downloads, cache: Mutex::new(HashMap::new()), chats: Mutex::new(HashMap::new()), generation: AtomicU64::new(0) })
     }
     pub async fn account_id(&self) -> Result<i64, String> {
         self.client.get_me().await.map(|user| user.id()).map_err(|e| format!("Fetching Telegram account failed: {e}"))
@@ -207,10 +209,10 @@ impl TelegramService {
             },
             media => media,
         };
-        let (mime, extension, expected_size) = match &media {
+        let (mime, extension) = match &media {
             Media::Photo(photo) => {
                 if photo.ttl_seconds().is_some() { return Err("Self-destructing photos cannot be exported".into()); }
-                ("image/jpeg".to_string(), "jpg".to_string(), None)
+                ("image/jpeg".to_string(), "jpg".to_string())
             }
             Media::Document(document) => {
                 if document.raw.ttl_seconds.is_some() { return Err("Self-destructing documents cannot be exported".into()); }
@@ -224,7 +226,7 @@ impl TelegramService {
                     return Err("Unsupported document MIME type; expected image, audio, or video".into());
                 }
                 let ext = mime_guess::get_mime_extensions_str(&mime).and_then(|exts| exts.first()).ok_or("No safe file extension is known for this media MIME type")?;
-                (mime, (*ext).to_string(), Some(size as usize))
+                (mime, (*ext).to_string())
             }
             _ => return Err("Message media is not an image, audio, or video document".into()),
         };
@@ -236,16 +238,9 @@ impl TelegramService {
         let mut options = tokio::fs::OpenOptions::new(); options.write(true).create_new(true);
         #[cfg(unix)] { options.mode(0o600); }
         let mut file = options.open(&path).await.map_err(|e| e.to_string())?;
-        let result: Result<usize, String> = async {
-            let mut stream = self.client.iter_download(&Downloadable::Media(media));
-            let mut total = 0usize;
-            while let Some(chunk) = stream.next().await.map_err(|e| format!("Media download failed: {e}"))? {
-                total = total.checked_add(chunk.len()).ok_or("Media size overflow")?;
-                if total > MAX_BYTES { return Err("Media exceeds the 256 MiB export limit".into()); }
-                file.write_all(&chunk).await.map_err(|e| e.to_string())?;
-            }
-            if total == 0 { return Err("Media download was empty".into()); }
-            if expected_size.is_some_and(|size| size != total) { return Err("Media download size differs from Telegram metadata".into()); }
+        let result: Result<u64, String> = async {
+            let total = self.downloads.save(&Downloadable::Media(media), &mut file, MAX_BYTES as u64, |_| {}, |_| async {})
+                .await.map_err(|error| error.to_string())?;
             file.sync_all().await.map_err(|e| e.to_string())?;
             Ok(total)
         }.await;

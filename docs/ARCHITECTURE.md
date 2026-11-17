@@ -157,6 +157,41 @@ pub async fn run(shared: Arc<Shared>, workers: Arc<Workers>);
 `Arc<Workers>` is created once in `service/mod.rs` and also given to `search.rs` for
 query embeddings (`urgent = true`).
 
+### Telegram downloads
+
+`crates/seekgram-service/src/download.rs` is shared by indexing, media exports and
+chat-search photos. It routes files directly to the DC in their media metadata,
+warming that connection before pipelining. `PhotoSize` lacks a DC, so its first
+request discovers one; subsequent parts retain that route.
+Known-size files then pipeline four 512 KiB requests, writing completed responses
+at their offsets. Eight requests at most are in flight across all downloads for
+the logged-in client, independently of indexing concurrency. Cold DC authorization
+is serialized to avoid duplicate exports in grammers. Unknown-size photos remain
+sequential; cached photo bytes need no request.
+
+This follows Telegram Desktop's bounded part-pipelining approach, not its entire
+transport: Desktop also adaptively scales multiple download sessions per DC.
+Seekgram currently reuses grammers' connection per remote DC and does not advertise
+CDN support. See [Desktop's download scheduler](https://github.com/telegramdesktop/tdesktop/blob/dev/Telegram/SourceFiles/storage/download_manager_mtproto.cpp)
+and [Telegram's file protocol](https://core.telegram.org/api/files#downloading-files).
+
+Each network request has a 180-second timeout. Byte limits apply before writing;
+known-size parts must exactly match their expected lengths, including the final
+part. Dropping the download drops its pending futures; no detached download tasks
+remain. Indexer progress counts successfully written bytes. Server flood waits
+pause new download requests across the client and retry only the affected part;
+completed parts are not downloaded again. The indexer persists and displays the
+wait countdown. Shutdown still discards scratch media; partial files are not
+durable download checkpoints. Pipelining does not bypass account-side rate limits.
+Structured `download:` records in `logs/service.log` report per-file bytes, elapsed
+time, DC and waits without message content, file references or credentials.
+
+After three repeated waits without completing a part, that file is recorded as
+`telegram:download_deferred` and retried after 15 minutes, without a permanent
+attempt cutoff. Fresh history is scanned before retrying at most four old failures
+per chat and pass, so a retry backlog cannot indefinitely hold up the rest of the index. Deferred files remain
+visible in the failure count; they are not reported as successfully indexed.
+
 ## The model
 
 EmbeddingGemma 2 (`onnx-community/embeddinggemma-2-ONNX`, pinned revision) runs in
