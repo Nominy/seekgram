@@ -108,6 +108,9 @@ pub async fn run(shared: Arc<Shared>, workers: Arc<Workers>) {
         let halt = index(&shared, &workers, &progress).await;
         progress.set(|tally| tally.chat = None);
         if let Halt::Failed(reason) = halt {
+            if reason == telegram::UNREADABLE {
+                if let Ok(telegram) = shared.telegram().await { telegram.reconnect(); }
+            }
             set_state(&shared, IndexerState::Failed, Some(reason));
             let _ = timeout(RETRY_INTERVAL, interrupted(&shared)).await;
         }

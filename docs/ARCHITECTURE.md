@@ -159,11 +159,15 @@ query embeddings (`urgent = true`).
 
 ### Telegram client and login
 
-grammers 0.12 (Telegram API layer 233) talks to Telegram. Telegram started sending
-layer-233 objects to older clients in November 2026; grammers 0.7 (layer 186) could no
-longer decode a message, so everything failed. A reply grammers cannot decode is an
-`InvocationError::Deserialize`: the indexer stops with `telegram::UNREADABLE` ("needs a
-Seekgram update") instead of blaming the network, and records no per-message failures.
+grammers 0.12 (Telegram API layer 233) talks to Telegram. Telegram serves an
+authorization in the API layer that its most recent connection announced in
+`initConnection`. Another program using Seekgram's login (a Telethon 1.45 script, layer
+229) therefore switches Seekgram's replies to that layer, and grammers cannot decode
+them: `InvocationError::Deserialize`, "unexpected constructor". That is what broke 0.1.0
+(layer 186) in November 2026. The indexer then stops with `telegram::UNREADABLE`
+instead of blaming the network and records no per-message failures; it and chat search
+call `TelegramService::reconnect`, whose new connections announce layer 233 again.
+Never reuse `telegram.sqlite3` or its keys in another client.
 
 The login lives in `paths::session_db()` (`telegram.sqlite3`), kept by `session_store.rs`
 through rusqlite: grammers' own SQLite storage would link libsql's SQLite next to

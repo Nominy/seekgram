@@ -9,7 +9,7 @@
 
 use std::{path::Path, sync::Arc, time::Duration};
 
-use grammers_client::{media::{Document, InputMedia, Media, Photo}, message::{InputMessage, Message}, peer::{Peer, User}, tl, update::Update};
+use grammers_client::{InvocationError, media::{Document, InputMedia, Media, Photo}, message::{InputMessage, Message}, peer::{Peer, User}, tl, update::Update};
 use grammers_mtsender::UpdatesConfiguration;
 use grammers_session::{types::PeerId, updates::UpdatesLike};
 use serde_json::{json, Value};
@@ -132,6 +132,7 @@ pub async fn run(shared: Arc<Shared>, service: Arc<TelegramService>, workers: Ar
     let mut configured = shared.settings().search_chat;
     let mut changed = shared.changed.subscribe();
     let mut last: Option<Last> = None;
+    let mut reconnected: Option<std::time::Instant> = None;
     eprintln!("Chat search: listening");
     loop {
         let update = tokio::select! {
@@ -154,6 +155,12 @@ pub async fn run(shared: Arc<Shared>, service: Arc<TelegramService>, workers: Ar
             Ok(_) => continue,
             Err(error) => {
                 eprintln!("Chat search: update stream error: {error}");
+                // Replies in another API layer (`telegram::UNREADABLE`): a new connection
+                // asks for ours again. Once a minute at most, so a real mismatch does not loop.
+                if matches!(error, InvocationError::Deserialize(_)) && reconnected.is_none_or(|at| at.elapsed() >= Duration::from_secs(60)) {
+                    service.reconnect();
+                    reconnected = Some(std::time::Instant::now());
+                }
                 tokio::time::sleep(Duration::from_secs(5)).await;
                 continue;
             }

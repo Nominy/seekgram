@@ -108,12 +108,11 @@ impl Account {
     /// store has saved the login as it changed.
     async fn ready(&mut self) {
         let Some(connection) = &self.connection else { return };
-        let (client, session) = (connection.client.clone(), connection.session.clone());
-        let me: User = match client.get_me().await {
+        let me: User = match connection.client.get_me().await {
             Ok(me) => me,
             Err(error) => return self.step(AccountStep::Connecting, Some(explain(&error))),
         };
-        let service = match TelegramService::new(client, session) {
+        let service = match TelegramService::new(connection) {
             Ok(service) => Arc::new(service),
             Err(error) => return self.step(AccountStep::Connecting, Some(format!("The drafts database could not be opened: {error}"))),
         };

@@ -13,9 +13,11 @@ use crate::paths;
 
 use super::{download::Source, session_store::SessionStore};
 
-/// Telegram answered with something this build cannot decode: Telegram's API moved on and
-/// Seekgram has to be updated. Never a network problem, so it must not be reported as one.
-pub(crate) const UNREADABLE: &str = "Seekgram cannot read Telegram's replies because Telegram changed its protocol. This needs a Seekgram update, which installs itself once it is released.";
+/// Telegram answered with objects of another API layer than grammers'. Telegram serves an
+/// authorization in the layer its most recent connection announced, so another program
+/// using this login (an older Telethon script, say) switches Seekgram's replies to that
+/// layer. A new connection announces ours again; see `TelegramService::reconnect`.
+pub(crate) const UNREADABLE: &str = "Seekgram cannot read Telegram's replies. This happens when another program uses Seekgram's Telegram login; Seekgram reconnects and tries again in a minute.";
 
 /// A client and the connection pool it sends through. The pool runs until `close`.
 pub struct Connection {
@@ -113,6 +115,7 @@ pub(crate) fn document_media(document: tl::enums::Document) -> Document {
 pub struct TelegramService {
     pub(crate) client: Client,
     pub(crate) downloads: Arc<super::download::Downloader>,
+    pool: SenderPoolHandle,
     cache: Mutex<HashMap<String, (Instant, Value)>>,
     /// Chats by marked ID from the last dialog listing. Listing dialogs for every
     /// lookup drew Telegram flood waits; a miss relists once, which also finds new chats.
@@ -120,11 +123,18 @@ pub struct TelegramService {
     generation: AtomicU64,
 }
 impl TelegramService {
-    /// Wraps a client that is already authorized.
-    pub fn new(client: Client, session: Arc<SessionStore>) -> Result<Self, String> {
+    /// Wraps the client of a connection that is already authorized.
+    pub fn new(connection: &Connection) -> Result<Self, String> {
         db()?;
-        let downloads = Arc::new(super::download::Downloader::new(client.clone(), session));
-        Ok(Self { client, downloads, cache: Mutex::new(HashMap::new()), chats: Mutex::new(HashMap::new()), generation: AtomicU64::new(0) })
+        let client = connection.client.clone();
+        let downloads = Arc::new(super::download::Downloader::new(client.clone(), connection.session.clone()));
+        Ok(Self { client, downloads, pool: connection.pool.clone(), cache: Mutex::new(HashMap::new()), chats: Mutex::new(HashMap::new()), generation: AtomicU64::new(0) })
+    }
+    /// Drops every connection; the next request opens a new one, whose `initConnection`
+    /// makes Telegram answer in grammers' API layer again (`UNREADABLE`).
+    pub(crate) fn reconnect(&self) {
+        eprintln!("Telegram: reconnecting to get replies in Seekgram's API layer again");
+        for dc in 1..=5 { self.pool.disconnect_from_dc(dc); }
     }
     pub async fn account_id(&self) -> Result<i64, String> {
         self.client.get_me().await.map(|user| marked_id(user.id())).map_err(|e| format!("Fetching Telegram account failed: {e}"))
