@@ -6611,7 +6611,7 @@ dependencies = [
 
 [[package]]
 name = "seekgram"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "embed-resource",
  "reqwest",
@@ -6624,7 +6624,7 @@ dependencies = [
 
 [[package]]
 name = "seekgram-app"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "gpui-component",
@@ -6637,7 +6637,7 @@ dependencies = [
 
 [[package]]
 name = "seekgram-core"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "reqwest",
  "serde",
@@ -6649,7 +6649,7 @@ dependencies = [
 
 [[package]]
 name = "seekgram-embed"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "image",
@@ -6666,7 +6666,7 @@ dependencies = [
 
 [[package]]
 name = "seekgram-service"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "axum",
  "flate2",

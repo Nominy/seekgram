@@ -201,14 +201,22 @@ fn search_db(db: &mut Connection, vector: &[f32], limit: usize, modality: Option
             }
         }
     }
-    // A second pass counts all messages, including duplicates seen before a group entered top K.
+    // Probe the winning image prefixes in the same snapshot. A prefix is only a lookup
+    // hint: two different vectors can share it, so compare the full bytes below.
     if grouped && best.iter().any(|hit| hit.vector.is_some()) {
         let mut prefixes: Vec<([u8; 8], usize)> = best.iter().enumerate().filter_map(|(index, hit)| {
             hit.vector.as_ref().map(|bytes| (bytes[..8].try_into().expect("validated vector"), index))
         }).collect();
         prefixes.sort_unstable();
-        let mut statement = tx.prepare("SELECT chat_id, message_id, vector FROM items WHERE modality='image' ORDER BY chat_id, message_id").map_err(index_error)?;
-        let mut rows = statement.query([]).map_err(index_error)?;
+        let mut sql = String::from("SELECT chat_id, message_id, vector FROM items WHERE modality='image' AND substr(vector,1,8) IN (");
+        for i in 0..prefixes.len() {
+            if i != 0 { sql.push(','); }
+            sql.push('?');
+        }
+        // Only order within each group matters. This order is also the index order.
+        sql.push_str(") ORDER BY substr(vector,1,8), chat_id, message_id");
+        let mut statement = tx.prepare(&sql).map_err(index_error)?;
+        let mut rows = statement.query(rusqlite::params_from_iter(prefixes.iter().map(|(prefix, _)| prefix.as_slice()))).map_err(index_error)?;
         while let Some(row) = rows.next().map_err(index_error)? {
             let pair = (row.get(0).map_err(index_error)?, row.get(1).map_err(index_error)?);
             let bytes = row.get_ref(2).map_err(index_error)?.as_blob().map_err(index_error)?;
@@ -301,7 +309,8 @@ fn near_duplicates_db(db: &mut Connection, id: &str, digest: &[u8; 32], limit: u
     validate_model(&tx)?;
     let account_id = index_account_id(&tx)?;
     let reference = {
-        let mut statement = tx.prepare("SELECT vector FROM items WHERE modality='image'").map_err(index_error)?;
+        // This is a full-vector digest, not a prefix lookup. Read in table order.
+        let mut statement = tx.prepare("SELECT vector FROM items NOT INDEXED WHERE modality='image'").map_err(index_error)?;
         let mut rows = statement.query([]).map_err(index_error)?;
         let mut found = None;
         while let Some(row) = rows.next().map_err(index_error)? {

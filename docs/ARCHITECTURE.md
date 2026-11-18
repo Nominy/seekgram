@@ -272,6 +272,16 @@ can be moved in: tables `metadata`, `items`, `checkpoints`, `failures`, `sources
 (schema in `crates/seekgram-service/src/indexer.rs`, `open_database`). Vectors are 768 little-endian
 `f32`, L2-normalized. Model identity strings must stay byte-identical.
 
+Opening a compatible index for writing adds a partial SQLite index on the first eight
+vector bytes, chat ID and message ID for images only. Grouped search still scores every
+candidate; it uses this index to find occurrences of the winners in the same read
+snapshot. Full vector equality decides group membership, not the eight-byte prefix.
+Older read-only indexes return the same results without the lookup acceleration.
+
+When resuming an image, the indexer checks the source signature and stored vector before
+downloading. A changed signature invalidates old segments first. Video and audio can have
+partial segment sets; a single stored segment is not proof those messages are finished.
+
 ## Build and test
 
 Do not run `cargo` while several people are editing; the integrator builds once.

@@ -488,6 +488,9 @@ fn prepare(db: &mut Connection, account_id: i64) -> Result<(), OpenError> {
             }
         }
     }
+    // Optional acceleration structure: older/read-only indexes remain searchable.
+    transaction.execute_batch("CREATE INDEX IF NOT EXISTS image_vector_prefix
+        ON items(substr(vector,1,8),chat_id,message_id) WHERE modality='image'")?;
     transaction.commit()?;
     Ok(())
 }
@@ -525,10 +528,11 @@ fn clear_failure(db: &Connection, chat_id: i64, message_id: i32) -> rusqlite::Re
 /// one, the vectors of the old file are dropped before the new one is indexed.
 fn adopt_source(db: &mut Connection, chat_id: i64, message_id: i32, signature: &str) -> rusqlite::Result<()> {
     let transaction = db.transaction()?;
-    let known: Option<String> = transaction
-        .query_row("SELECT signature FROM sources WHERE chat_id=?1 AND message_id=?2", params![chat_id, message_id], |row| row.get(0))
+    let unchanged: Option<bool> = transaction
+        .query_row("SELECT signature=?3 FROM sources WHERE chat_id=?1 AND message_id=?2", params![chat_id, message_id, signature], |row| row.get(0))
         .optional()?;
-    if known.is_some_and(|known| known != signature) {
+    if unchanged == Some(true) { return transaction.commit(); }
+    if unchanged == Some(false) {
         transaction.execute("DELETE FROM items WHERE chat_id=?1 AND message_id=?2", params![chat_id, message_id])?;
     }
     transaction.execute("INSERT OR REPLACE INTO sources VALUES (?1,?2,?3)", params![chat_id, message_id, signature])?;
@@ -1450,14 +1454,17 @@ impl Session {
 
     async fn index_media_once(&self, chat_id: i64, id: i32, target: &Target) -> Result<(), Fault> {
         let signature = target.signature.clone();
-        self.db.call(move |db| adopt_source(db, chat_id, id, &signature)).await?;
+        let image = target.kind == Kind::Image;
+        let stored_image = self.db.call(move |db| {
+            adopt_source(db, chat_id, id, &signature)?;
+            if image { has_item(db, chat_id, id, "image", 0) } else { Ok(false) }
+        }).await?;
+        if stored_image { return Ok(()); }
         let scratch = Scratch::create()?;
         let source = scratch.path.join("source");
         self.download(target, &source).await?;
-        if target.kind == Kind::Image {
-            if !self.stored(chat_id, id, Kind::Image, 0).await? {
-                self.embed(chat_id, id, Kind::Image, 0, &source, None).await?;
-            }
+        if image {
+            self.embed(chat_id, id, Kind::Image, 0, &source, None).await?;
             return Ok(());
         }
         let probe = match tool(provision::ffprobe(), probe_arguments(&source)).await {
