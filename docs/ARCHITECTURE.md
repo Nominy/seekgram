@@ -206,6 +206,12 @@ durable download checkpoints. Pipelining does not bypass account-side rate limit
 Structured `download:` records in `logs/service.log` report per-file bytes, elapsed
 time, DC and waits without message content, file references or credentials.
 
+The indexer's concurrency setting limits **active media tasks**, not how many
+messages may finish out of order. A fast photo frees its slot even if an older
+video is still running. The chat checkpoint advances only across a finished
+prefix. To bound crash replay, scanning stops at 500 uncheckpointed messages
+or eight uncheckpointed media messages per configured slot, whichever comes first.
+
 After three repeated waits without completing a part, that file is recorded as
 `telegram:download_deferred` and retried after 15 minutes, without a permanent
 attempt cutoff. Fresh history is scanned before retrying at most four old failures

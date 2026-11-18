@@ -75,6 +75,8 @@ const RETRY_INTERVAL: Duration = Duration::from_secs(60);
 const PAGE: i32 = 100;
 /// Messages kept ahead of the checkpoint while an older one is still being indexed.
 const WINDOW: usize = 500;
+/// Bound media to revisit after a crash without making one straggler idle its peers.
+const MEDIA_LOOKAHEAD_PER_TASK: usize = 8;
 const PUBLISH_INTERVAL: Duration = Duration::from_millis(300);
 const RATE_WINDOW: Duration = Duration::from_secs(180);
 /// Shortest span the rate is averaged over, so the first item does not read as hundreds per minute.
@@ -1068,6 +1070,8 @@ enum Slot {
 #[derive(Default)]
 struct Window {
     slots: VecDeque<(i32, Slot)>,
+    /// Running and finished media not yet removed from the oldest end.
+    media: usize,
 }
 
 /// The oldest messages of a window that are all done.
@@ -1079,21 +1083,18 @@ struct Advance {
 }
 
 impl Window {
-    fn len(&self) -> usize {
-        self.slots.len()
+    fn can_admit(&self, tasks: usize, concurrency: usize) -> bool {
+        tasks < concurrency && self.slots.len() < WINDOW && self.media < concurrency * MEDIA_LOOKAHEAD_PER_TASK
     }
 
     fn is_empty(&self) -> bool {
         self.slots.is_empty()
     }
 
-    /// Media messages not yet behind the checkpoint, finished or not. Bounding this,
-    /// rather than only the running ones, bounds what is downloaded again after a crash.
-    fn media(&self) -> usize {
-        self.slots.iter().filter(|(_, slot)| matches!(slot, Slot::Running | Slot::Finished)).count()
-    }
-
     fn push(&mut self, id: i32, slot: Slot) {
+        if slot == Slot::Running {
+            self.media += 1;
+        }
         self.slots.push_back((id, slot));
     }
 
@@ -1107,7 +1108,7 @@ impl Window {
     fn advance(&mut self) -> Option<Advance> {
         let done = self.slots.iter().take_while(|(_, slot)| *slot != Slot::Running).count();
         let checkpoint = self.slots.get(done.checked_sub(1)?)?.0;
-        let settled = self
+        let settled: Vec<_> = self
             .slots
             .drain(..done)
             .filter_map(|(id, slot)| match slot {
@@ -1115,6 +1116,7 @@ impl Window {
                 _ => None,
             })
             .collect();
+        self.media -= done - settled.len();
         Some(Advance { checkpoint, messages: done as u64, settled })
     }
 }
@@ -1370,14 +1372,13 @@ impl Session {
         let mut window = Window::default();
         loop {
             let concurrency = usize::from(self.shared.read(|status| status.settings.concurrency).clamp(1, 16));
-            let room = |window: &Window| window.len() < WINDOW && window.media() < concurrency;
-            while room(&window) {
+            while window.can_admit(tasks.len(), concurrency) {
                 let Some(message) = fetched.pop_front() else { break };
                 self.admit(chat.id, message, &mut window, tasks);
             }
             if let Some(advance) = window.advance() {
                 self.commit(chat.id, advance).await?;
-            } else if fetched.is_empty() && !history.finished && room(&window) {
+            } else if fetched.is_empty() && !history.finished && window.can_admit(tasks.len(), concurrency) {
                 fetched.extend(self.page(&mut history).await?);
             } else if window.is_empty() {
                 return Ok(());
@@ -1646,20 +1647,40 @@ mod tests {
         window.push(13, Slot::Running);
         window.push(14, Slot::Settled(Some(SELF_DESTRUCTING)));
         window.push(15, Slot::Running);
-        assert_eq!((window.len(), window.media()), (5, 3));
+        assert!(!window.can_admit(3, 3));
         assert_eq!(window.advance(), None);
 
         // Newer messages finishing first must not move the checkpoint past the oldest.
         window.finish(15);
         window.finish(13);
         assert_eq!(window.advance(), None);
-        assert_eq!(window.media(), 3);
+        assert!(window.can_admit(1, 3));
 
         window.finish(11);
         let advance = window.advance().unwrap();
         assert_eq!(advance, Advance { checkpoint: 15, messages: 5, settled: vec![(12, None), (14, Some(SELF_DESTRUCTING))] });
         assert!(window.is_empty());
         assert_eq!(window.advance(), None);
+    }
+
+    #[test]
+    fn straggler_allows_refills_but_bounds_crash_replay() {
+        let mut window = Window::default();
+        let concurrency = 2;
+        window.push(1, Slot::Running);
+        let limit = (concurrency * MEDIA_LOOKAHEAD_PER_TASK) as i32;
+        for id in 2..=limit {
+            assert!(window.can_admit(1, concurrency));
+            window.push(id, Slot::Running);
+            assert!(!window.can_admit(2, concurrency));
+            window.finish(id);
+            assert_eq!(window.advance(), None);
+        }
+        assert!(!window.can_admit(1, concurrency));
+        window.finish(1);
+        assert_eq!(window.advance().unwrap().checkpoint, limit);
+        assert!(window.can_admit(0, concurrency));
+        assert_eq!(window.media, 0);
     }
 
     #[test]
