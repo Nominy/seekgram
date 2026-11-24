@@ -3,15 +3,20 @@
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::{sync::Arc, time::{Duration, SystemTime, UNIX_EPOCH}};
+use std::{path::Path, time::{Duration, SystemTime, UNIX_EPOCH}};
+#[cfg(windows)]
+use std::sync::Arc;
 
+use super::index_query::LocalIndex;
+#[cfg(windows)]
+use super::index_query::IndexQuery;
+#[cfg(windows)]
 use super::workers::{Embed, EmbedError, Kind, Workers};
 
 const MODEL_REPO: &str = "google/embeddinggemma-2";
 const MODEL_REVISION: &str = "f9972ac22e696a105c482202646979e33e4b5a1e";
 const DIMENSIONS: usize = 768;
-fn open_index() -> Result<Connection, String> {
-    let path = crate::paths::index_dir().join("index.sqlite3");
+fn open_index(path: &Path) -> Result<Connection, String> {
     let db = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)
         .map_err(|e| format!("photo_index_open_failed: {e}"))?;
     db.busy_timeout(Duration::from_secs(3)).map_err(|e| format!("photo_index_error: {e}"))?;
@@ -41,6 +46,7 @@ fn index_account_id(db: &Connection) -> Result<i64, String> {
         .ok_or_else(|| "photo_index_account_missing_or_invalid".to_string())
 }
 fn now() -> u64 { SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() }
+#[cfg(windows)]
 /// Embeds one search input. Searches jump ahead of queued indexing work.
 async fn embedding(workers: &Arc<Workers>, kind: Kind, input: String) -> Result<Vec<f32>, String> {
     let workers = workers.clone();
@@ -105,10 +111,11 @@ fn parse_cursor(value: Option<&Value>) -> Result<Option<(i64, i64)>, String> {
     Ok(Some((chat, message)))
 }
 
-fn search(vector: Vec<f32>, limit: usize, modality: Option<String>, grouped: bool, similar: Option<f32>) -> Result<Value, String> {
-    search_db(&mut open_index()?, &vector, limit, modality.as_deref(), grouped, similar)
+fn search(path: &Path, vector: Vec<f32>, limit: usize, modality: Option<String>, grouped: bool, similar: Option<f32>) -> Result<Value, String> {
+    search_db(&mut open_index(path)?, &vector, limit, modality.as_deref(), grouped, similar)
 }
 
+#[cfg(windows)]
 /// One search input: a text query or a canonical local image path.
 fn parse_input(query: Option<&Value>, image_path: Option<&Value>) -> Result<(Kind, String), String> {
     match (query, image_path) {
@@ -133,6 +140,7 @@ fn parse_input(query: Option<&Value>, image_path: Option<&Value>) -> Result<(Kin
     }
 }
 
+#[cfg(any(windows, test))]
 /// The query vector for weighted inputs: their weighted sum, renormalized, so
 /// several pictures of one subject search for what they share and a negative
 /// weight steers away from an input. `None` when the inputs cancel out.
@@ -343,8 +351,8 @@ fn near_duplicates_db(db: &mut Connection, id: &str, digest: &[u8; 32], limit: u
               "notice":"Similarity is a review suggestion, not proof of the same image; groups and messages are not merged.",
               "freshness":"Reference and candidate ranking use separate SQLite read snapshots; concurrent indexing may change results."}))
 }
-fn status() -> Result<Value, String> {
-    let mut db = open_index()?;
+fn status(path: &Path) -> Result<Value, String> {
+    let mut db = open_index(path)?;
     let tx = db.transaction().map_err(|e| format!("photo_index_error: {e}"))?;
     validate_model(&tx)?;
     let account_id = index_account_id(&tx)?;
@@ -362,9 +370,71 @@ fn status() -> Result<Value, String> {
     Ok(json!({"account_id": account_id, "items_by_modality": counts, "model_compatible": true, "model_repo": MODEL_REPO, "model_revision": MODEL_REVISION, "processing_version": "omni-v1", "snapshot_completed_unix": now(), "freshness": "SQLite read snapshot; ongoing indexing may not be included"}))
 }
 
+#[cfg(windows)]
 pub async fn dispatch(workers: &Arc<Workers>, action: &str, args: Value) -> Result<Value, String> {
+    LocalIndex::with_workers(workers.clone()).query(action, args).await
+}
+
+struct Options {
+    limit: usize,
+    modality: Option<String>,
+    grouped: bool,
+    similar: Option<f32>,
+}
+
+impl Options {
+    // Shared by the existing Windows search and the headless vector entry point.
+    fn parse(args: &Value) -> Result<Self, String> {
+        let modality = match args.get("modality") {
+            None => None,
+            Some(Value::String(value)) if matches!(value.as_str(), "image" | "audio" | "video") => Some(value.clone()),
+            _ => return Err("invalid_argument: modality must be image, audio, or video".into()),
+        };
+        let limit = match args.get("limit") { None => 10, Some(v) => v.as_u64().filter(|n| (1..=100).contains(n)).ok_or("invalid_argument: limit must be between 1 and 100")? as usize };
+        let grouped = match args.get("group_duplicates") {
+            None => true,
+            Some(Value::Bool(value)) => *value,
+            _ => return Err("invalid_argument: group_duplicates must be a boolean".into()),
+        };
+        let similar = match args.get("similar_threshold") {
+            None => Some(0.99),
+            Some(Value::Null) => None,
+            Some(value) => Some(value.as_f64().filter(|v| (0.9..=1.0).contains(v)).ok_or("invalid_argument: similar_threshold must be null or between 0.9 and 1.0")? as f32),
+        };
+        Ok(Self { limit, modality, grouped, similar })
+    }
+}
+
+async fn rank(path: std::path::PathBuf, vector: Vec<f32>, options: Options) -> Result<Value, String> {
+    tokio::task::spawn_blocking(move || search(&path, vector, options.limit, options.modality, options.grouped, options.similar))
+        .await.map_err(|_| "photo_index_task_failed".to_string())?
+}
+
+#[cfg(target_os = "linux")]
+fn external_vector(args: &Value) -> Result<Vec<f32>, String> {
+    if args.as_object().is_none_or(|obj| obj.keys().any(|name|
+        !matches!(name.as_str(), "vector" | "modality" | "limit" | "group_duplicates" | "similar_threshold"))) {
+        return Err("invalid_argument: unexpected vector search field".into());
+    }
+    let values = args.get("vector").and_then(Value::as_array).filter(|a| a.len() == DIMENSIONS)
+        .ok_or("invalid_argument: vector must contain exactly 768 numbers")?;
+    let mut parsed = Vec::with_capacity(DIMENSIONS);
+    for value in values {
+        let scalar = value.as_f64().filter(|x| x.is_finite()).ok_or("invalid_argument: vector values must be finite numbers")?;
+        parsed.push(scalar);
+    }
+    // Scale before computing the norm: even extreme finite JSON inputs cannot
+    // overflow or underflow the sum.
+    let scale = parsed.iter().fold(0.0f64, |scale, value| scale.max(value.abs()));
+    if scale == 0.0 { return Err("invalid_argument: vector must not be zero".into()); }
+    let norm = parsed.iter().map(|v| (v / scale).powi(2)).sum::<f64>().sqrt();
+    Ok(parsed.into_iter().map(|v| (v / scale / norm) as f32).collect())
+}
+
+pub(crate) async fn query(index: &LocalIndex, action: &str, args: Value) -> Result<Value, String> {
     if !args.is_object() { return Err("invalid_argument: arguments must be an object".into()); }
     match action {
+        #[cfg(windows)]
         "media_search" => {
             let inputs: Vec<(Kind, String, f32)> = match args.get("inputs") {
                 None => { let (kind, input) = parse_input(args.get("query"), args.get("image_path"))?; vec![(kind, input, 1.0)] }
@@ -384,35 +454,29 @@ pub async fn dispatch(workers: &Arc<Workers>, action: &str, args: Value) -> Resu
                     inputs
                 }
             };
-            let modality = match args.get("modality") {
-                None => None,
-                Some(Value::String(value)) if matches!(value.as_str(), "image" | "audio" | "video") => Some(value.clone()),
-                _ => return Err("invalid_argument: modality must be image, audio, or video".into()),
-            };
-            let limit = match args.get("limit") { None => 10, Some(v) => v.as_u64().filter(|n| (1..=100).contains(n)).ok_or("invalid_argument: limit must be between 1 and 100")? as usize };
-            let grouped = match args.get("group_duplicates") {
-                None => true,
-                Some(Value::Bool(value)) => *value,
-                _ => return Err("invalid_argument: group_duplicates must be a boolean".into()),
-            };
-            let similar = match args.get("similar_threshold") {
-                None => Some(0.99),
-                Some(Value::Null) => None,
-                Some(value) => Some(value.as_f64().filter(|v| (0.9..=1.0).contains(v)).ok_or("invalid_argument: similar_threshold must be null or between 0.9 and 1.0")? as f32),
-            };
+            let options = Options::parse(&args)?;
             // Avoid loading the model at all for an absent or incompatible index.
-            tokio::task::spawn_blocking(|| { let db = open_index()?; validate_model(&db) }).await.map_err(|_| "photo_index_task_failed")??;
+            let path = index.path.clone();
+            tokio::task::spawn_blocking(move || { let db = open_index(&path)?; validate_model(&db) }).await.map_err(|_| "photo_index_task_failed")??;
             let mut parts = Vec::with_capacity(inputs.len());
-            for (kind, input, weight) in inputs { parts.push((weight, embedding(workers, kind, input).await?)); }
+            for (kind, input, weight) in inputs { parts.push((weight, embedding(&index.workers, kind, input).await?)); }
             let vector = combine(&parts).ok_or("invalid_argument: the weighted inputs cancel out")?;
-            tokio::task::spawn_blocking(move || search(vector, limit, modality, grouped, similar)).await.map_err(|_| "photo_index_task_failed".to_string())?
+            rank(index.path.clone(), vector, options).await
+        }
+        #[cfg(not(windows))]
+        "media_search" => Err("media_embeddings_unavailable: headless Seekgram needs a precomputed query vector (media_search_vector)".into()),
+        #[cfg(target_os = "linux")]
+        "media_search_vector" => {
+            let vector = external_vector(&args)?;
+            rank(index.path.clone(), vector, Options::parse(&args)?).await
         }
         "media_occurrences" => {
             let id = args.get("group_id").and_then(Value::as_str).ok_or("invalid_argument: group_id must be a string")?.to_owned();
             let digest = parse_group_id(&id)?;
             let limit = match args.get("limit") { None => 10, Some(v) => v.as_u64().filter(|n| (1..=100).contains(n)).ok_or("invalid_argument: limit must be between 1 and 100")? as usize };
             let after = parse_cursor(args.get("cursor"))?;
-            tokio::task::spawn_blocking(move || occurrences_db(&mut open_index()?, &id, &digest, limit, after)).await.map_err(|_| "photo_index_task_failed".to_string())?
+            let path = index.path.clone();
+            tokio::task::spawn_blocking(move || occurrences_db(&mut open_index(&path)?, &id, &digest, limit, after)).await.map_err(|_| "photo_index_task_failed".to_string())?
         }
         "media_near_duplicates" => {
             let id = args.get("group_id").and_then(Value::as_str).ok_or("invalid_argument: group_id must be a string")?.to_owned();
@@ -422,9 +486,13 @@ pub async fn dispatch(workers: &Arc<Workers>, action: &str, args: Value) -> Resu
                 None => 0.99,
                 Some(value) => value.as_f64().filter(|v| v.is_finite() && (0.9..=1.0).contains(v)).ok_or("invalid_argument: threshold must be between 0.9 and 1.0")?,
             };
-            tokio::task::spawn_blocking(move || near_duplicates_db(&mut open_index()?, &id, &digest, limit, threshold as f32)).await.map_err(|_| "photo_index_task_failed".to_string())?
+            let path = index.path.clone();
+            tokio::task::spawn_blocking(move || near_duplicates_db(&mut open_index(&path)?, &id, &digest, limit, threshold as f32)).await.map_err(|_| "photo_index_task_failed".to_string())?
         }
-        "media_status" => tokio::task::spawn_blocking(status).await.map_err(|_| "photo_index_task_failed".to_string())?,
+        "media_status" => {
+            let path = index.path.clone();
+            tokio::task::spawn_blocking(move || status(&path)).await.map_err(|_| "photo_index_task_failed".to_string())?
+        }
         _ => Err(format!("unknown_media_action: {action}")),
     }
 }
@@ -433,8 +501,9 @@ pub async fn dispatch(workers: &Arc<Workers>, action: &str, args: Value) -> Resu
 mod tests {
     use super::*;
 
-    fn fixture() -> Connection {
-        let db = Connection::open_in_memory().unwrap();
+    fn fixture() -> Connection { initialize_fixture(Connection::open_in_memory().unwrap()) }
+
+    fn initialize_fixture(db: Connection) -> Connection {
         db.execute_batch("CREATE TABLE metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);
             CREATE TABLE items(chat_id INTEGER, message_id INTEGER, segment INTEGER, modality TEXT,
                 start_seconds REAL, end_seconds REAL, vector BLOB,
@@ -460,6 +529,36 @@ mod tests {
     fn insert(db: &Connection, chat: i64, message: i64, segment: i64, modality: &str, bytes: &[u8]) {
         db.execute("INSERT INTO items VALUES (?1, ?2, ?3, ?4, NULL, NULL, ?5)",
             rusqlite::params![chat, message, segment, modality, bytes]).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn headless_adapter_queries_existing_index_without_worker() {
+        use crate::index_query::for_account;
+
+        let root = std::env::temp_dir().join(format!("seekgram-vector-fixture-{}", uuid::Uuid::new_v4()));
+        let path = root.join("index.sqlite3");
+        std::fs::create_dir(&root).unwrap();
+        let db = initialize_fixture(Connection::open(&path).unwrap());
+        insert(&db, 1, 8, 0, "image", &vector(1.0, 0.0));
+        insert(&db, 1, 9, 0, "image", &vector(0.0, 1.0));
+        drop(db);
+        let index = LocalIndex { path };
+        let mut v = vec![0.0; DIMENSIONS];
+        v[1] = 1e300;
+        let args = json!({"vector":v,"limit":1});
+        let result = for_account(&index, 123, "media_search_vector", args.clone()).await.unwrap();
+        assert_eq!(result["results"][0]["message_id"], 9);
+        assert_eq!(result["results"][0]["score"], 1.0);
+        assert_eq!(for_account(&index, 999, "media_search_vector", args).await.unwrap_err(),
+                   "media_index_account_mismatch_or_missing");
+        for invalid in [json!({"vector":[1,2]}), json!({"vector":vec![0;DIMENSIONS]}),
+                        json!({"vector":vec!["x";DIMENSIONS]})] {
+            assert!(for_account(&index, 123, "media_search_vector", invalid).await.unwrap_err().starts_with("invalid_argument:"));
+        }
+        assert!(for_account(&index, 123, "media_search", json!({"query":"synthetic"})).await.unwrap_err()
+            .starts_with("media_embeddings_unavailable:"));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

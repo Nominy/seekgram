@@ -1,7 +1,9 @@
 //! The loopback control API the panel and CLI use, and the mount point of `/mcp`.
 //!
 //! Everything here is reachable only from this machine and only with the access token,
-//! which is stored encrypted for the Windows user. Browser pages cannot reach it either:
+//! which is stored encrypted for the Windows user or in the private Linux data directory.
+//! On Linux owner controls use a Unix socket; only the MCP route is on loopback TCP.
+//! Browser pages cannot reach it either:
 //! requests must name a loopback host and, if they carry an Origin, a loopback origin.
 
 use std::{net::{Ipv4Addr, SocketAddr}, sync::Arc, time::Duration};
@@ -22,14 +24,16 @@ use tokio::sync::oneshot;
 
 use crate::config::Settings;
 
-use super::{chat_search, mcp, provision, state::{LoginCommand, LoginRequest, Shared, Status}, workers::Workers};
+use super::{index_query::IndexQuery, mcp, state::{LoginCommand, LoginRequest, Shared, Status}};
+#[cfg(windows)]
+use super::{chat_search, provision};
 
 const MAX_BODY: usize = 1024 * 1024;
 
 #[derive(Clone)]
 pub struct AppState {
     pub shared: Arc<Shared>,
-    pub workers: Arc<Workers>,
+    pub index: Arc<dyn IndexQuery>,
     token_hash: [u8; 32],
     port: u16,
     /// Held for reading by requests that outlive their connection; shutdown waits for it.
@@ -56,11 +60,26 @@ async fn guard(State(state): State<AppState>, request: Request, next: Next) -> R
     if headers.contains_key(header::ORIGIN) && !mcp::single_header(headers, "origin").is_some_and(|origin| mcp::valid_origin(origin, state.port)) {
         return StatusCode::FORBIDDEN.into_response();
     }
-    let Some(supplied) = mcp::single_header(headers, "authorization").and_then(|value| value.strip_prefix("Bearer ")) else {
+    if !authorized(headers, &state.token_hash) {
         return StatusCode::UNAUTHORIZED.into_response();
-    };
+    }
+    next.run(request).await
+}
+
+fn authorized(headers: &axum::http::HeaderMap, hash: &[u8; 32]) -> bool {
+    let Some(supplied) = mcp::single_header(headers, "authorization").and_then(|value| value.strip_prefix("Bearer ")) else { return false; };
     let supplied: [u8; 32] = Sha256::digest(supplied.as_bytes()).into();
-    if !bool::from(state.token_hash.ct_eq(&supplied)) {
+    bool::from(hash.ct_eq(&supplied))
+}
+
+#[cfg(target_os = "linux")]
+async fn guard_owner(State(state): State<AppState>, request: Request, next: Next) -> Response {
+    // The private socket is the origin boundary. Do not couple its request Host
+    // to the TCP port because a changed setting takes effect on next start.
+    if request.headers().contains_key(header::ORIGIN) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    if !authorized(request.headers(), &state.token_hash) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     next.run(request).await
@@ -138,12 +157,14 @@ async fn settings(State(state): State<AppState>, Json(body): Json<Value>) -> Rep
     Ok(Json(state.shared.status()))
 }
 
+#[cfg(windows)]
 async fn search_chat_create(State(state): State<AppState>) -> Reply {
     let telegram = state.shared.telegram().await.map_err(refused)?;
     chat_search::use_group(&state.shared, &telegram).await.map_err(failed)?;
     Ok(Json(state.shared.status()))
 }
 
+#[cfg(windows)]
 async fn search_chat_saved(State(state): State<AppState>) -> Reply {
     state.shared.set_settings(|settings| {
         if settings.search_chat.is_some() { settings.search_group = settings.search_chat; }
@@ -152,6 +173,7 @@ async fn search_chat_saved(State(state): State<AppState>) -> Reply {
     Ok(Json(state.shared.status()))
 }
 
+#[cfg(windows)]
 async fn setup_repair(State(state): State<AppState>) -> Json<Status> {
     provision::repair();
     Json(state.shared.status())
@@ -162,35 +184,147 @@ async fn shutdown(State(state): State<AppState>) -> Json<Status> {
     Json(state.shared.status())
 }
 
-/// Serves until shutdown, then lets requests that outlived their connection finish.
-pub async fn serve(shared: Arc<Shared>, workers: Arc<Workers>) -> Result<(), String> {
-    let port = shared.settings().port;
-    let token = shared.secrets.lock().unwrap_or_else(|e| e.into_inner()).token.clone();
-    let listener = tokio::net::TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, port))).await
-        .map_err(|error| format!("Port {port} on this PC is not available ({error}). Another program may be using it."))?;
-    let in_flight = Arc::new(tokio::sync::RwLock::new(()));
-    let state = AppState { shared: shared.clone(), workers, token_hash: Sha256::digest(token.as_bytes()).into(), port, in_flight: in_flight.clone() };
-    let app = Router::new()
+fn controls() -> Router<AppState> {
+    let control = Router::new()
         .route("/api/status", get(status))
         .route("/api/login/api_key", post(login_api_key))
         .route("/api/login/phone", post(login_phone))
         .route("/api/login/code", post(login_code))
         .route("/api/login/password", post(login_password))
         .route("/api/logout", post(logout))
-        .route("/api/settings", post(settings))
+        .route("/api/settings", post(settings));
+    #[cfg(windows)]
+    let control = control
         .route("/api/search_chat/create", post(search_chat_create))
         .route("/api/search_chat/saved", post(search_chat_saved))
-        .route("/api/setup/repair", post(setup_repair))
-        .route("/api/shutdown", post(shutdown))
-        .route("/mcp", any(mcp::endpoint))
-        .layer(middleware::from_fn_with_state(state.clone(), guard))
-        .layer(DefaultBodyLimit::max(MAX_BODY))
-        .with_state(state);
-    eprintln!("Control API listening on loopback port {port}");
+        .route("/api/setup/repair", post(setup_repair));
+    control.route("/api/shutdown", post(shutdown))
+}
+
+fn tcp_routes(state: AppState) -> Router {
+    let routes = Router::new().route("/mcp", any(mcp::endpoint));
+    #[cfg(not(target_os = "linux"))]
+    let routes = controls().merge(routes);
+    routes.layer(middleware::from_fn_with_state(state.clone(), guard))
+        .layer(DefaultBodyLimit::max(MAX_BODY)).with_state(state)
+}
+
+#[cfg(target_os = "linux")]
+fn owner_routes(state: AppState) -> Router {
+    controls().layer(middleware::from_fn_with_state(state.clone(), guard_owner))
+        .layer(DefaultBodyLimit::max(MAX_BODY)).with_state(state)
+}
+
+/// Serves until shutdown, then lets requests that outlived their connection finish.
+pub async fn serve(shared: Arc<Shared>, index: Arc<dyn IndexQuery>) -> Result<(), String> {
+    let port = shared.settings().port;
+    let token = shared.secrets.lock().unwrap_or_else(|e| e.into_inner()).token.clone();
+    let listener = tokio::net::TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, port))).await
+        .map_err(|error| format!("Port {port} on this PC is not available ({error}). Another program may be using it."))?;
+    let in_flight = Arc::new(tokio::sync::RwLock::new(()));
+    let state = AppState { shared: shared.clone(), index, token_hash: Sha256::digest(token.as_bytes()).into(), port, in_flight: in_flight.clone() };
+    let app = tcp_routes(state.clone());
+    #[cfg(target_os = "linux")]
+    let local = bind_control_socket()?;
+    eprintln!("{} listening on loopback port {port}", if cfg!(target_os = "linux") { "MCP" } else { "Control API" });
     let stopping = shared.clone();
-    let result = axum::serve(listener, app).with_graceful_shutdown(async move { stopping.stopped().await }).await
-        .map_err(|error| format!("The control API stopped unexpectedly: {error}"));
+    let serve_tcp = async move {
+        axum::serve(listener, app).with_graceful_shutdown(async move { stopping.stopped().await }).await
+            .map_err(|error| format!("The control API stopped unexpectedly: {error}"))
+    };
+    #[cfg(not(target_os = "linux"))]
+    let result = serve_tcp.await;
+    #[cfg(target_os = "linux")]
+    let result = {
+        let owner = owner_routes(state);
+        let serve_local = async move {
+            axum::serve(local, owner).with_graceful_shutdown(async move { shared.stopped().await }).await
+                .map_err(|error| format!("The owner control socket stopped unexpectedly: {error}"))
+        };
+        let result = tokio::try_join!(serve_tcp, serve_local).map(|_| ());
+        let _ = std::fs::remove_file(crate::paths::control_socket());
+        result
+    };
     // A send detached from a closed connection is allowed to finish, within reason.
     let _ = tokio::time::timeout(Duration::from_secs(30), in_flight.write()).await;
     result
+}
+
+/// Called while the service owns its data-directory lock. A previous process may
+/// have left a socket after a crash; never remove an unrelated file or symlink.
+#[cfg(target_os = "linux")]
+fn bind_control_socket() -> Result<tokio::net::UnixListener, String> {
+    use std::os::unix::fs::{FileTypeExt, PermissionsExt};
+
+    let path = crate::paths::control_socket();
+    match std::fs::symlink_metadata(&path) {
+        Ok(meta) if meta.file_type().is_socket() => std::fs::remove_file(&path).map_err(|e| e.to_string())?,
+        Ok(_) => return Err("The owner control socket path is not a socket".into()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {},
+        Err(e) => return Err(e.to_string()),
+    }
+    let socket = tokio::net::UnixListener::bind(&path).map_err(|e| format!("Cannot bind owner control socket: {e}"))?;
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+        .map_err(|e| format!("Cannot restrict owner control socket: {e}"))?;
+    Ok(socket)
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+    use axum::body::{Body, to_bytes};
+    use seekgram_core::config::Secrets;
+    use tower::ServiceExt;
+
+    fn state(enabled: bool) -> AppState {
+        const MOCK_TOKEN: &str = "fixture-test-only";
+        let settings = Settings { mcp: enabled, ..Settings::default() };
+        let port = settings.port;
+        let (send, _) = tokio::sync::mpsc::channel(1);
+        let shared = Shared::new(settings, Secrets { token: MOCK_TOKEN.into(), ..Secrets::default() }, send);
+        AppState { shared, index: Arc::new(super::super::index_query::LocalIndex::headless()),
+            token_hash: Sha256::digest(MOCK_TOKEN.as_bytes()).into(), port,
+            in_flight: Arc::new(tokio::sync::RwLock::new(())) }
+    }
+
+    async fn request(router: Router, method: &str, path: &str, auth: bool, origin: Option<&str>, body: Value) -> (StatusCode, Value) {
+        let builder = Request::builder().method(method).uri(path)
+            .header("host", "127.0.0.1:28741").header("content-type", "application/json");
+        let builder = if auth { builder.header("authorization", "Bearer fixture-test-only") } else { builder };
+        let builder = if let Some(origin) = origin { builder.header("origin", origin) } else { builder };
+        let response = router.oneshot(builder.body(Body::from(body.to_string())).unwrap()).await.unwrap();
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), MAX_BODY).await.unwrap();
+        (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+    }
+
+    #[tokio::test]
+    async fn headless_mcp_auth_protocol_and_no_telegram_session() {
+        let hello = json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25"}});
+        let app = tcp_routes(state(true));
+        assert_eq!(request(app.clone(), "POST", "/mcp", false, None, hello.clone()).await.0, StatusCode::UNAUTHORIZED);
+        assert_eq!(request(app.clone(), "POST", "/mcp", true, Some("http://example.invalid"), hello.clone()).await.0, StatusCode::FORBIDDEN);
+        assert_eq!(request(tcp_routes(state(false)), "POST", "/mcp", true, None, hello.clone()).await.0, StatusCode::NOT_FOUND);
+        for version in ["2025-03-26", "2025-06-18", "2025-11-25"] {
+            let mut init = hello.clone();
+            init["params"]["protocolVersion"] = json!(version);
+            let (status, reply) = request(app.clone(), "POST", "/mcp", true, None, init).await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(reply["result"]["protocolVersion"], version);
+        }
+        let (_, response) = request(app.clone(), "POST", "/mcp", true, None,
+            json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"history","arguments":{"chat":"123"}}})).await;
+        assert_eq!(response["result"]["isError"], true);
+        assert!(response["result"]["content"][0]["text"].as_str().unwrap().contains("not logged in"));
+        assert_eq!(request(app, "GET", "/api/status", true, None, Value::Null).await.0, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn owner_socket_routes_are_separate() {
+        let app = owner_routes(state(true));
+        assert_eq!(request(app.clone(), "GET", "/api/status", false, None, Value::Null).await.0, StatusCode::UNAUTHORIZED);
+        assert_eq!(request(app.clone(), "GET", "/api/status", true, Some("http://127.0.0.1:28741"), Value::Null).await.0, StatusCode::FORBIDDEN);
+        assert_eq!(request(app.clone(), "GET", "/api/status", true, None, Value::Null).await.0, StatusCode::OK);
+        assert_eq!(request(app, "POST", "/mcp", true, None, Value::Null).await.0, StatusCode::NOT_FOUND);
+    }
 }

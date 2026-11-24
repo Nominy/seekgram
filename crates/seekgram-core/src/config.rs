@@ -1,4 +1,5 @@
-//! Settings (plain JSON) and secrets (encrypted with Windows DPAPI for the current user).
+//! Settings are plain JSON. Secrets use Windows DPAPI on Windows; Linux uses
+//! owner-only filesystem permissions and stores them unencrypted at rest.
 
 use std::{fs, io::Write, path::Path};
 
@@ -35,7 +36,8 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { port: DEFAULT_PORT, indexing: true, workers: 0, concurrency: 6, search_chat: None, search_group: None, autostart: true, mcp: false, check_updates: true }
+        let windows_features = !cfg!(target_os = "linux");
+        Self { port: DEFAULT_PORT, indexing: windows_features, workers: 0, concurrency: 6, search_chat: None, search_group: None, autostart: windows_features, mcp: false, check_updates: windows_features }
     }
 }
 
@@ -43,7 +45,11 @@ impl Settings {
     /// Missing or unreadable settings are the defaults; a damaged file is not an error
     /// worth refusing to start over.
     pub fn load() -> Self {
-        fs::read(paths::settings_file()).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default()
+        #[cfg(target_os = "linux")]
+        let bytes = read_private(&paths::settings_file()).ok();
+        #[cfg(not(target_os = "linux"))]
+        let bytes = fs::read(paths::settings_file()).ok();
+        bytes.and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default()
     }
     pub fn save(&self) -> Result<(), String> {
         write_atomic(&paths::settings_file(), &serde_json::to_vec_pretty(self).map_err(|e| e.to_string())?)
@@ -64,12 +70,29 @@ impl Secrets {
     /// Loads the secrets, creating the access token on first use.
     pub fn load() -> Result<Self, String> {
         let path = paths::secrets_file();
-        let mut secrets: Secrets = match fs::read(&path) {
+        #[cfg(target_os = "linux")]
+        paths::prepare_data_dir()?;
+        Self::read_secrets(&path, true)
+    }
+
+    /// The Linux CLI never creates credentials on behalf of a service that is not running.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn load_existing() -> Result<Self, String> {
+        Self::read_secrets(&paths::secrets_file(), false)
+    }
+
+    fn read_secrets(path: &Path, create: bool) -> Result<Self, String> {
+        #[cfg(target_os = "linux")]
+        let bytes = read_private(path);
+        #[cfg(not(target_os = "linux"))]
+        let bytes = fs::read(path);
+        let mut secrets: Secrets = match bytes {
             Ok(bytes) => serde_json::from_slice(&unprotect(&bytes)?).map_err(|e| format!("secrets are unreadable: {e}"))?,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Secrets::default(),
+            Err(error) if create && error.kind() == std::io::ErrorKind::NotFound => Secrets::default(),
             Err(error) => return Err(format!("cannot read secrets: {error}")),
         };
         if secrets.token.is_empty() {
+            if !create { return Err("The Seekgram service has not initialized its local credentials.".into()); }
             secrets.token = format!("{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple());
             secrets.save()?;
         }
@@ -82,6 +105,7 @@ impl Secrets {
 }
 
 /// Writes through a temporary file so a crash never leaves a half-written file behind.
+#[cfg(not(target_os = "linux"))]
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let directory = path.parent().ok_or("path has no parent")?;
     fs::create_dir_all(directory).map_err(|e| format!("cannot create {}: {e}", directory.display()))?;
@@ -90,6 +114,39 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     file.write_all(bytes).and_then(|_| file.sync_all()).map_err(|e| format!("cannot write {}: {e}", temporary.display()))?;
     drop(file);
     fs::rename(&temporary, path).map_err(|e| format!("cannot replace {}: {e}", path.display()))
+}
+
+#[cfg(target_os = "linux")]
+fn read_private(path: &Path) -> std::io::Result<Vec<u8>> {
+    use std::{io::Read, os::unix::fs::OpenOptionsExt};
+
+    paths::private_data_dir(&paths::data_dir(), false).map_err(std::io::Error::other)?;
+    // O_NONBLOCK also ensures an unexpected FIFO cannot block pre-validation.
+    let mut file = fs::OpenOptions::new().read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK).open(path)?;
+    paths::verify_owned_node(path, &file.metadata()?).map_err(std::io::Error::other)?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
+#[cfg(target_os = "linux")]
+pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    use std::os::unix::fs::OpenOptionsExt;
+    paths::prepare_data_dir()?;
+    let directory = path.parent().ok_or("path has no parent")?;
+    paths::private_data_dir(directory, false)?;
+    match fs::symlink_metadata(path) {
+        Ok(meta) => paths::verify_owned_node(path, &meta)?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+        Err(e) => return Err(format!("cannot inspect {}: {e}", path.display())),
+    }
+    let temporary = directory.join(format!(".seekgram-{}.tmp", uuid::Uuid::new_v4()));
+    let mut file = fs::OpenOptions::new().write(true).create_new(true).mode(0o600)
+        .open(&temporary).map_err(|e| format!("cannot create {}: {e}", temporary.display()))?;
+    let result = file.write_all(bytes).and_then(|_| file.sync_all()).and_then(|_| fs::rename(&temporary, path));
+    if result.is_err() { let _ = fs::remove_file(&temporary); }
+    result.map_err(|e| format!("cannot replace {}: {e}", path.display()))
 }
 
 #[cfg(windows)]
@@ -113,7 +170,27 @@ fn protect(plain: &[u8]) -> Result<Vec<u8>, String> { dpapi(plain, true) }
 #[cfg(windows)]
 fn unprotect(sealed: &[u8]) -> Result<Vec<u8>, String> { dpapi(sealed, false) }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 fn protect(_: &[u8]) -> Result<Vec<u8>, String> { Err("secret storage is only implemented for Windows".into()) }
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 fn unprotect(_: &[u8]) -> Result<Vec<u8>, String> { Err("secret storage is only implemented for Windows".into()) }
+
+
+#[cfg(target_os = "linux")]
+fn protect(plain: &[u8]) -> Result<Vec<u8>, String> { Ok(plain.to_vec()) }
+#[cfg(target_os = "linux")]
+fn unprotect(sealed: &[u8]) -> Result<Vec<u8>, String> { Ok(sealed.to_vec()) }
+
+#[cfg(all(test, any(windows, target_os = "linux")))]
+mod tests {
+    use super::Settings;
+
+    #[test]
+    fn platform_defaults_keep_mcp_opt_in() {
+        let settings = Settings::default();
+        assert!(!settings.mcp);
+        assert_eq!(settings.indexing, cfg!(windows));
+        assert_eq!(settings.autostart, cfg!(windows));
+        assert_eq!(settings.check_updates, cfg!(windows));
+    }
+}

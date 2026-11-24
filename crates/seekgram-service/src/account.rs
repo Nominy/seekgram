@@ -8,10 +8,13 @@ use tokio::{sync::mpsc, task::JoinHandle};
 
 use crate::paths;
 
-use super::{chat_search, state::{AccountStep, LoginCommand, LoginRequest, Shared}, telegram::{self, Connection, TelegramService, marked_id}, workers::Workers};
+use super::{state::{AccountStep, LoginCommand, LoginRequest, Shared}, telegram::{self, Connection, TelegramService, marked_id}};
+#[cfg(windows)]
+use super::{chat_search, workers::Workers};
 
 struct Account {
     shared: Arc<Shared>,
+    #[cfg(windows)]
     workers: Arc<Workers>,
     /// Connected, though not necessarily logged in yet.
     connection: Option<Connection>,
@@ -127,7 +130,14 @@ impl Account {
         self.shared.update(|status| { status.account.step = AccountStep::Ready; status.account.error = None; status.account.password_hint = None; });
         self.shared.notify();
         eprintln!("Account: logged in");
-        self.listener = Some(tokio::spawn(chat_search::run(self.shared.clone(), service, self.workers.clone(), me, updates)));
+        #[cfg(windows)]
+        { self.listener = Some(tokio::spawn(chat_search::run(self.shared.clone(), service, self.workers.clone(), me, updates))); }
+        #[cfg(not(windows))]
+        {
+            // Drain the pool's update channel, but do not index or auto-respond in headless mode.
+            let mut updates = updates;
+            self.listener = Some(tokio::spawn(async move { while updates.recv().await.is_some() {} }));
+        }
     }
 
     async fn forget(&mut self) {
@@ -232,8 +242,8 @@ impl Account {
 }
 
 /// Runs until shutdown, serving login steps from the control API.
-pub async fn run(shared: Arc<Shared>, workers: Arc<Workers>, mut commands: mpsc::Receiver<LoginRequest>) {
-    let mut account = Account { shared: shared.clone(), workers, connection: None, code: None, password: None, listener: None };
+pub async fn run(shared: Arc<Shared>, #[cfg(windows)] workers: Arc<Workers>, mut commands: mpsc::Receiver<LoginRequest>) {
+    let mut account = Account { shared: shared.clone(), #[cfg(windows)] workers, connection: None, code: None, password: None, listener: None };
     let mut reachable = account.connect().await;
     loop {
         tokio::select! {

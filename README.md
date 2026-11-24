@@ -155,7 +155,8 @@ $seekgram = "$env:LOCALAPPDATA\Seekgram.App\current\seekgram.exe"
 
 ## Requirements
 
-- **Windows 10 or 11**, 64-bit. There is no macOS or Linux version.
+- The desktop app and local embedding engine require **Windows 10 or 11**, 64-bit.
+  Linux has an optional [headless service](docs/HEADLESS.md); there is no macOS version.
 - **A DirectX 12 graphics card** (NVIDIA, AMD or Intel) is recommended. Without
   one the model runs on the processor, which works but is many times slower.
 - **About 6 GB of free disk space** for the model, its tools and the index.
@@ -195,10 +196,11 @@ What it does with that access:
   It sends only search results, and only into your search chat: Saved Messages,
   or a group whose only member is you. That is checked when the group is chosen,
   not afterwards: if you add someone to the group later, they see your results.
-- **Secrets are encrypted.** The Telegram login session and your API key are
-  stored encrypted for your Windows user (DPAPI), in `%LOCALAPPDATA%\Seekgram`.
-  Other accounts on the PC and copies of the files on another machine cannot use
-  them; programs running as you can.
+- **Protect the data directory.** Windows encrypts the API key and access token
+  with DPAPI. The separate Telegram session database contains a reusable login
+  key, and the drafts database contains draft text. Treat the whole
+  `%LOCALAPPDATA%\Seekgram` folder as private. Linux uses
+  [owner-only file permissions](docs/HEADLESS.md), not file encryption.
 
 Seekgram is not affiliated with Telegram.
 
@@ -275,6 +277,9 @@ one while developing. A build run from `target\` does not update itself; only a
 copy installed with Seekgram Setup does. To try updates against a local folder of
 `vpk pack` output, set `SEEKGRAM_UPDATE_URL` to that folder before starting the
 service.
+
+The [headless Linux instructions](docs/HEADLESS.md) cover building and running
+the service without DirectML or the desktop app.
 
 <details>
 <summary>Project layout and releasing</summary>

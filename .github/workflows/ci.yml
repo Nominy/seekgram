@@ -27,6 +27,19 @@ jobs:
       - name: Build and test
         run: cargo nextest run --workspace --locked --cargo-profile ci --no-tests=warn
 
+  linux-headless:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Test headless packages
+        run: cargo test --locked --profile ci -p seekgram -p seekgram-core -p seekgram-service
+      - name: Build headless binary
+        run: cargo build --locked --profile ci -p seekgram
+      - name: Smoke-test the headless MCP service
+        run: python3 tests/headless_mcp.py target/ci/seekgram
+
   installer:
     runs-on: windows-latest
     steps:
