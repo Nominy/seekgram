@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 
 use seekgram_core::control::{call, running, start_service};
 
+#[cfg(windows)]
 const HELP: &str = "\
 Seekgram: search your Telegram photos, videos and audio by meaning
 
@@ -13,6 +14,24 @@ usage: seekgram            open the control panel
        seekgram stop       stop the background service
        seekgram status     print the service status as JSON
        seekgram --version";
+
+#[cfg(not(any(windows, target_os = "linux")))]
+const HELP: &str = "Seekgram currently supports Windows and Linux.";
+
+#[cfg(target_os = "linux")]
+const HELP: &str = "\
+Seekgram: headless Telegram service
+
+usage: seekgram service    run the service in the foreground
+       seekgram start      start a detached service and return
+       seekgram login      sign in interactively from your terminal
+       seekgram stop       stop the service
+       seekgram status     print the service status as JSON
+       seekgram --version";
+
+#[cfg(target_os = "linux")]
+#[path = "headless_login.rs"]
+mod headless_login;
 
 /// A GUI-subsystem process has no console of its own. When started from a terminal
 /// without redirection, borrow the terminal so the CLI modes can print.
@@ -60,22 +79,31 @@ fn focus_existing_panel() -> bool {
     }
 }
 
-#[cfg(not(windows))]
-fn focus_existing_panel() -> bool { false }
-
 pub fn run() -> i32 {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     match arguments.first().map(String::as_str) {
+        #[cfg(target_os = "linux")]
+        None => report(Ok(HELP.to_owned())),
+        #[cfg(windows)]
         None => {
             if !focus_existing_panel() { seekgram_app::run(); }
             0
         }
+        #[cfg(not(any(windows, target_os = "linux")))]
+        None | Some("service") => report(Err("Seekgram currently supports Windows and Linux.".into())),
+        #[cfg(any(windows, target_os = "linux"))]
         Some("service") => seekgram_service::main(),
         // Started by the service with piped stdin/stdout; it must not touch the console.
+        #[cfg(windows)]
         Some("embed-worker") => seekgram_embed::main(),
         Some(command) => {
             attach_console();
             match command {
+                #[cfg(target_os = "linux")]
+                "login" => {
+                    if arguments.len() != 1 { return report(Err("Use seekgram login without arguments; enter credentials only at the terminal prompts.".into())); }
+                    report(headless_login::run())
+                }
                 "start" => report(start_service().map(|()| "Seekgram is running.".to_owned())),
                 "stop" => {
                     if !running() { return report(Ok("Seekgram is not running.".to_owned())); }

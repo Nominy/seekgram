@@ -72,12 +72,16 @@ default-run = "seekgram"
 [dependencies]
 seekgram-core.workspace = true
 seekgram-service.workspace = true
-seekgram-embed.workspace = true
-seekgram-app.workspace = true
 reqwest.workspace = true
 
 [target.'cfg(windows)'.dependencies]
+seekgram-embed.workspace = true
+seekgram-app.workspace = true
 windows.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+serde_json.workspace = true
 
 [build-dependencies]
 embed-resource = "3"

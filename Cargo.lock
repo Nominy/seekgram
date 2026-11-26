@@ -6614,11 +6614,13 @@ name = "seekgram"
 version = "0.1.4"
 dependencies = [
  "embed-resource",
+ "libc",
  "reqwest",
  "seekgram-app",
  "seekgram-core",
  "seekgram-embed",
  "seekgram-service",
+ "serde_json",
  "windows 0.61.3",
 ]
 
@@ -6639,6 +6641,7 @@ dependencies = [
 name = "seekgram-core"
 version = "0.1.4"
 dependencies = [
+ "libc",
  "reqwest",
  "serde",
  "serde_json",
@@ -6686,6 +6689,7 @@ dependencies = [
  "sha2 0.10.9",
  "subtle",
  "tokio",
+ "tower",
  "tray-icon",
  "uuid",
  "velopack",

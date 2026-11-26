@@ -4,27 +4,38 @@
 pub mod account;
 pub mod api;
 pub mod cache;
+#[cfg(windows)]
 pub mod chat_search;
 mod download;
+#[cfg(windows)]
 pub mod indexer;
+#[cfg(windows)]
 pub mod install;
+pub mod index_query;
 pub mod mcp;
+#[cfg(windows)]
 pub mod provision;
 pub mod search;
 pub mod state;
 mod session_store;
 pub mod telegram;
+#[cfg(windows)]
 pub mod tray;
+#[cfg(windows)]
 pub mod update;
+#[cfg(windows)]
 pub mod workers;
 
-use std::{fs, io::{BufRead, BufReader, Write}, time::Duration};
+use std::{fs, sync::Arc, time::Duration};
+#[cfg(windows)]
+use std::io::{BufRead, BufReader, Write};
 
 use fs2::FileExt;
 use tokio::sync::mpsc;
 
 use seekgram_core::{config::{Secrets, Settings}, paths};
 use seekgram_core::{autostart, config};
+#[cfg(windows)]
 use seekgram_embed as embed;
 
 use state::Shared;
@@ -39,6 +50,7 @@ pub fn hidden(command: &mut tokio::process::Command) -> &mut tokio::process::Com
     command
 }
 
+#[cfg(windows)]
 const LOG_LIMIT: u64 = 5 * 1024 * 1024;
 
 /// `2026-01-31T12:34:56Z` from the system clock, without a date library.
@@ -132,11 +144,13 @@ fn release_children() {
     if let Err(error) = changed { eprintln!("Seekgram: cannot release the process group: {error}"); }
 }
 
-#[cfg(not(windows))]
-fn release_children() {}
-
 /// Runs the service until it is asked to stop. Returns the process exit code.
 pub fn main() -> i32 {
+    #[cfg(target_os = "linux")]
+    if let Err(error) = paths::prepare_data_dir().and_then(|()| paths::verify_data_tree()) {
+        eprintln!("Seekgram cannot prepare its private data folder: {error}");
+        return 1;
+    }
     if let Err(error) = fs::create_dir_all(paths::data_dir()) {
         eprintln!("Seekgram cannot create its data folder {}: {error}", paths::data_dir().display());
         return 1;
@@ -167,6 +181,7 @@ pub fn main() -> i32 {
     runtime.shutdown_timeout(Duration::from_secs(5));
     eprintln!("Seekgram stopped");
     drop(lock);
+    #[cfg(windows)]
     update::apply_pending();
     code
 }
@@ -177,27 +192,37 @@ async fn run() -> Result<(), String> {
     let secrets = Secrets::load()?;
     let (login, commands) = mpsc::channel(8);
     let shared = Shared::new(Settings::load(), secrets, login);
+    #[cfg(windows)]
     let workers = workers::Workers::new(shared.clone());
+    #[cfg(windows)]
+    let index = Arc::new(index_query::LocalIndex::with_workers(workers.clone()));
+    #[cfg(not(windows))]
+    let index = Arc::new(index_query::LocalIndex::headless());
 
+    #[cfg(windows)]
     let tasks = [
         tokio::spawn(provision::run(shared.clone())),
         tokio::spawn(account::run(shared.clone(), workers.clone(), commands)),
         tokio::spawn(indexer::run(shared.clone(), workers.clone())),
         tokio::spawn(update::run(shared.clone())),
     ];
+    #[cfg(not(windows))]
+    let tasks = [tokio::spawn(account::run(shared.clone(), commands))];
     tokio::task::spawn_blocking(cache::enforce);
+    #[cfg(windows)]
     tray::spawn(shared.clone());
     let interrupted = shared.clone();
     tokio::spawn(async move {
         if tokio::signal::ctrl_c().await.is_ok() { interrupted.shutdown.send_replace(true); }
     });
 
-    let served = api::serve(shared.clone(), workers.clone()).await;
+    let served = api::serve(shared.clone(), index).await;
     // Reached on shutdown, or when the API could not start; either way everything stops.
     shared.shutdown.send_replace(true);
     for task in tasks {
         if tokio::time::timeout(Duration::from_secs(15), task).await.is_err() { eprintln!("A task did not stop in time"); }
     }
+    #[cfg(windows)]
     workers.stop().await;
     served
 }
