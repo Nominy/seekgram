@@ -1,6 +1,6 @@
 //! The logged-in Telegram client and the read, draft and media-export actions built on it.
 
-use std::{collections::HashMap, fs, num::NonZeroU32, sync::{Arc, atomic::{AtomicU64, Ordering}}, time::{Duration, Instant, SystemTime, UNIX_EPOCH}};
+use std::{collections::HashMap, fs, num::NonZeroU32, path::Path, sync::{Arc, atomic::{AtomicU64, Ordering}}, time::{Duration, Instant, SystemTime, UNIX_EPOCH}};
 use grammers_client::{Client, media::{Document, Downloadable as _, Media, Photo}, message::Message, peer::Peer, tl};
 use grammers_mtsender::{AutoSleep, ConnectionParams, SenderPool, SenderPoolHandle};
 use grammers_session::{types::{PeerId, PeerRef}, updates::UpdatesLike};
@@ -74,7 +74,72 @@ fn integer(args: &Value, key: &str, default: i64, min: i64, max: i64) -> Result<
 pub(crate) fn marked_id(peer: PeerId) -> i64 {
     peer.bot_api_dialog_id().unwrap_or(0)
 }
-fn message(m: &Message) -> Value { json!({"message_id":m.id(), "chat_id":marked_id(m.peer_id()), "date":m.date().to_string(), "text":m.text(), "outgoing":m.outgoing()}) }
+fn message(m: &Message) -> Value {
+    let sender = m.sender();
+    json!({"message_id":m.id(), "chat_id":marked_id(m.peer_id()), "date":m.date().to_string(), "text":m.text(), "outgoing":m.outgoing(),
+        "sender_id":sender.map(|peer| marked_id(peer.id())), "sender_name":sender.and_then(Peer::name), "media":m.media().as_ref().map(media_summary)})
+}
+/// What a message carries, so a reader can tell an attachment from an empty message and
+/// pick `file_download` or `media_view` without fetching it.
+fn media_summary(media: &Media) -> Value {
+    match media {
+        Media::Photo(_) => json!({"kind":"photo"}),
+        Media::Document(document) if document.raw.document.is_some() => json!({"kind":"document", "file_name":document.name().filter(|n| !n.is_empty()),
+            "mime_type":document.mime_type(), "size_bytes":document.size()}),
+        Media::Sticker(_) => json!({"kind":"sticker"}),
+        Media::WebPage(_) => json!({"kind":"web_page"}),
+        Media::Poll(_) => json!({"kind":"poll"}),
+        Media::Contact(_) => json!({"kind":"contact"}),
+        Media::Geo(_) | Media::GeoLive(_) | Media::Venue(_) => json!({"kind":"location"}),
+        _ => json!({"kind":"other"}),
+    }
+}
+/// Largest file `media_view` or `file_download` exports.
+const MAX_EXPORT_BYTES: usize = 256 * 1024 * 1024;
+/// `name` as a single file name Windows and Unix accept: no directories, reserved
+/// characters or trailing dots, at most 150 characters. Telegram file names are
+/// sender-controlled, so they must never reach the file system unchanged.
+fn safe_file_name(name: &str) -> Option<String> {
+    let base = name.rsplit(['/', '\\']).next().unwrap_or_default();
+    let cleaned: String = base.chars().map(|c| if c.is_control() || matches!(c, '<' | '>' | ':' | '"' | '|' | '?' | '*') { '_' } else { c }).take(150).collect();
+    let cleaned = cleaned.trim().trim_end_matches(['.', ' ']).to_string();
+    let stem = cleaned.split('.').next().unwrap_or_default().to_ascii_uppercase();
+    let reserved = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL") || (stem.len() == 4 && (stem.starts_with("COM") || stem.starts_with("LPT")) && stem.as_bytes()[3].is_ascii_digit());
+    (!cleaned.is_empty() && !reserved).then_some(cleaned)
+}
+/// The downloadable media of `m`: a sticker as its document, a web preview as its photo or document.
+fn downloadable(m: &Message) -> Result<Media, String> {
+    if matches!(&m.raw, tl::enums::Message::Message(raw) if raw.ttl_period.is_some()) { return Err("Self-destructing messages cannot be exported".into()); }
+    let media = match m.media().ok_or("Message has no downloadable media")? {
+        Media::Sticker(sticker) => Media::Document(sticker.document),
+        Media::WebPage(page) => match page.raw.webpage {
+            tl::enums::WebPage::Page(web) => {
+                if let Some(photo) = web.photo {
+                    Media::Photo(Photo::from_raw(photo))
+                } else if let Some(document) = web.document {
+                    Media::Document(document_media(document))
+                } else {
+                    return Err("Web preview has no downloadable image or document".into());
+                }
+            }
+            _ => return Err("Web preview is unavailable".into()),
+        },
+        media => media,
+    };
+    match &media {
+        Media::Photo(photo) if photo.ttl_seconds().is_some() => return Err("Self-destructing photos cannot be exported".into()),
+        Media::Document(document) => {
+            if document.raw.ttl_seconds.is_some() { return Err("Self-destructing documents cannot be exported".into()); }
+            let size = document.size().unwrap_or(0);
+            if size == 0 { return Err("Document size is unavailable or empty".into()); }
+            if size > MAX_EXPORT_BYTES { return Err("Media exceeds the 256 MiB export limit".into()); }
+        }
+        Media::Photo(_) => {}
+        _ => return Err("Message media is not a photo or a file".into()),
+    }
+    if media.to_raw_input_location().is_none() { return Err("Media cannot be downloaded".into()); }
+    Ok(media)
+}
 
 /// A chat and the reference that lets this account act on it.
 #[derive(Clone)]
@@ -160,6 +225,7 @@ impl TelegramService {
             "drafts" => self.drafts(),
             "draft_send" => self.draft_send(&args).await,
             "media_view" => self.media_view(&args).await,
+            "file_download" => self.file_download(&args).await,
             "media_counts" => self.media_counts(&args).await,
             "dialogs" | "history" | "search" => {
                 let key = format!("{action}:{}", args);
@@ -261,69 +327,90 @@ impl TelegramService {
         db()?.execute("UPDATE drafts SET state='sent', result=?2 WHERE id=?1 AND state='unknown'", params![id,result.to_string()]).map_err(|e| format!("Message sent but receipt could not be persisted; draft remains unknown: {e}"))?;
         Ok(json!({"draft_id":id,"state":"sent","message":result}))
     }
-    async fn media_view(&self, args: &Value) -> Result<Value, String> {
-        const MAX_BYTES: usize = 256 * 1024 * 1024;
+    /// The message `message_id` in `chat`, checked to belong to it.
+    async fn fetch_message(&self, args: &Value) -> Result<(Chat, i32, Message), String> {
         let chat = self.resolve(string_arg(args,"chat")?).await?;
         let id = integer(args,"message_id",0,1,i32::MAX as i64)? as i32;
-        let context_limit = integer(args,"context_limit",10,0,30)? as usize;
         let found = self.client.get_messages_by_id(&chat, &[id]).await.map_err(|e| format!("Fetching media message failed: {e}"))?;
         let m = found.into_iter().next().flatten().ok_or("Message not found")?;
         if m.peer_id() != chat.reference.id { return Err("Message does not belong to requested chat".into()); }
-        if matches!(&m.raw, tl::enums::Message::Message(raw) if raw.ttl_period.is_some()) { return Err("Self-destructing messages cannot be exported".into()); }
-        let media = match m.media().ok_or("Message has no downloadable media")? {
-            Media::Sticker(sticker) => Media::Document(sticker.document),
-            Media::WebPage(page) => match page.raw.webpage {
-                tl::enums::WebPage::Page(web) => {
-                    if let Some(photo) = web.photo {
-                        Media::Photo(Photo::from_raw(photo))
-                    } else if let Some(document) = web.document {
-                        Media::Document(document_media(document))
-                    } else {
-                        return Err("Web preview has no downloadable image or document".into());
-                    }
-                }
-                _ => return Err("Web preview is unavailable".into()),
-            },
-            media => media,
-        };
-        let (mime, extension) = match &media {
-            Media::Photo(photo) => {
-                if photo.ttl_seconds().is_some() { return Err("Self-destructing photos cannot be exported".into()); }
-                ("image/jpeg".to_string(), "jpg".to_string())
-            }
-            Media::Document(document) => {
-                if document.raw.ttl_seconds.is_some() { return Err("Self-destructing documents cannot be exported".into()); }
-                let size = document.size().unwrap_or(0);
-                if size == 0 { return Err("Document size is unavailable or empty".into()); }
-                if size > MAX_BYTES { return Err("Media exceeds the 256 MiB export limit".into()); }
-                let mime = document.mime_type().ok_or("Document MIME type is unavailable")?.to_ascii_lowercase();
-                let parts: Vec<&str> = mime.split('/').collect();
-                if parts.len() != 2 || !matches!(parts[0], "image" | "audio" | "video")
-                    || parts[1].is_empty() || !parts[1].bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'+' | b'-')) {
-                    return Err("Unsupported document MIME type; expected image, audio, or video".into());
-                }
-                let ext = mime_guess::get_mime_extensions_str(&mime).and_then(|exts| exts.first()).ok_or("No safe file extension is known for this media MIME type")?;
-                (mime, (*ext).to_string())
-            }
-            _ => return Err("Message media is not an image, audio, or video document".into()),
-        };
-        if media.to_raw_input_location().is_none() { return Err("Media cannot be downloaded".into()); }
-        let mut context = Vec::new();
-        if context_limit > 0 { let mut iter = self.client.iter_messages(&chat).offset_id(id).limit(context_limit); while let Some(item) = iter.next().await.map_err(|e| format!("Fetching media context failed: {e}"))? { context.push(message(&item)); } }
-        let dir = paths::cache_dir().join("views"); fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-        let path = dir.join(format!("{}.{}",Uuid::new_v4(), extension));
+        Ok((chat, id, m))
+    }
+    /// Downloads `media` into the new file `path`, which is removed again on failure.
+    async fn save_media(&self, media: Media, path: &Path) -> Result<u64, String> {
         let mut options = tokio::fs::OpenOptions::new(); options.write(true).create_new(true);
         #[cfg(unix)] { options.mode(0o600); }
-        let mut file = options.open(&path).await.map_err(|e| e.to_string())?;
+        let mut file = options.open(path).await.map_err(|e| e.to_string())?;
         let result: Result<u64, String> = async {
-            let total = self.downloads.save(&Source::Media(media), &mut file, MAX_BYTES as u64, |_| {}, |_| async {})
+            let total = self.downloads.save(&Source::Media(media), &mut file, MAX_EXPORT_BYTES as u64, |_| {}, |_| async {})
                 .await.map_err(|error| error.to_string())?;
             file.sync_all().await.map_err(|e| e.to_string())?;
             Ok(total)
         }.await;
         drop(file);
-        let size = match result { Ok(size) => size, Err(e) => { let _ = tokio::fs::remove_file(&path).await; return Err(e); } };
-        tokio::task::spawn_blocking(move || super::cache::grew(size as u64));
+        match result {
+            Ok(size) => { tokio::task::spawn_blocking(move || super::cache::grew(size)); Ok(size) }
+            Err(e) => { let _ = tokio::fs::remove_file(path).await; Err(e) }
+        }
+    }
+    async fn media_view(&self, args: &Value) -> Result<Value, String> {
+        let context_limit = integer(args,"context_limit",10,0,30)? as usize;
+        let (chat, id, m) = self.fetch_message(args).await?;
+        let media = downloadable(&m)?;
+        let (mime, extension) = match &media {
+            Media::Document(document) => {
+                let mime = document.mime_type().ok_or("Document MIME type is unavailable")?.to_ascii_lowercase();
+                let parts: Vec<&str> = mime.split('/').collect();
+                if parts.len() != 2 || !matches!(parts[0], "image" | "audio" | "video")
+                    || parts[1].is_empty() || !parts[1].bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'+' | b'-')) {
+                    return Err("Unsupported document MIME type; expected image, audio, or video. Use file_download for other files".into());
+                }
+                let ext = mime_guess::get_mime_extensions_str(&mime).and_then(|exts| exts.first()).ok_or("No safe file extension is known for this media MIME type")?;
+                (mime, (*ext).to_string())
+            }
+            _ => ("image/jpeg".to_string(), "jpg".to_string()),
+        };
+        let mut context = Vec::new();
+        if context_limit > 0 { let mut iter = self.client.iter_messages(&chat).offset_id(id).limit(context_limit); while let Some(item) = iter.next().await.map_err(|e| format!("Fetching media context failed: {e}"))? { context.push(message(&item)); } }
+        let dir = paths::cache_dir().join("views"); fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let path = dir.join(format!("{}.{}",Uuid::new_v4(), extension));
+        let size = self.save_media(media, &path).await?;
         Ok(json!({"path":path.to_string_lossy(), "mime_type":mime, "size_bytes":size, "message":message(&m), "context_before":context, "fetched_at_unix":timestamp()}))
+    }
+    /// Saves any attached file (documents of every type, photos) under its sanitized original
+    /// name, in a fresh folder of the media cache so names never collide.
+    async fn file_download(&self, args: &Value) -> Result<Value, String> {
+        let (_, id, m) = self.fetch_message(args).await?;
+        let media = downloadable(&m)?;
+        let (mime, name) = match &media {
+            Media::Document(document) => {
+                let mime = document.mime_type().map(str::to_ascii_lowercase);
+                let ext = mime.as_deref().and_then(mime_guess::get_mime_extensions_str).and_then(|exts| exts.first()).copied().unwrap_or("bin");
+                (mime.clone(), document.name().and_then(safe_file_name).unwrap_or_else(|| format!("{id}.{ext}")))
+            }
+            _ => (Some("image/jpeg".to_string()), format!("{id}.jpg")),
+        };
+        let dir = paths::cache_dir().join("files").join(Uuid::new_v4().to_string());
+        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let path = dir.join(&name);
+        let size = self.save_media(media, &path).await?;
+        Ok(json!({"path":path.to_string_lossy(), "file_name":name, "mime_type":mime, "size_bytes":size, "message":message(&m), "fetched_at_unix":timestamp()}))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::safe_file_name;
+
+    #[test]
+    fn file_names_cannot_escape_or_be_reserved() {
+        assert_eq!(safe_file_name("..\\..\\Windows\\evil.dll").as_deref(), Some("evil.dll"));
+        assert_eq!(safe_file_name("a/b/МВ_Лаб.doc").as_deref(), Some("МВ_Лаб.doc"));
+        assert_eq!(safe_file_name("what?:*.pdf").as_deref(), Some("what___.pdf"));
+        assert_eq!(safe_file_name("report. . ").as_deref(), Some("report"));
+        assert_eq!(safe_file_name("CON.txt"), None);
+        assert_eq!(safe_file_name("com1"), None);
+        assert_eq!(safe_file_name(".."), None);
+        assert_eq!(safe_file_name("   "), None);
     }
 }
